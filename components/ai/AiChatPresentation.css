@@ -56,6 +56,10 @@
 .ai-think-shimmer{background:linear-gradient(90deg,var(--ai-chat-muted) 20%,var(--ai-chat-text) 50%,var(--ai-chat-muted) 80%);background-size:200% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:ai-shimmer 2s linear infinite}
 .ai-think-box .ant-thought-chain-item-title,.ai-think-streaming .ant-thought-chain-item-title{font-size:12px!important;line-height:1.6!important}
 .ai-think-box .ant-thought-chain-item-desc,.ai-think-streaming .ant-thought-chain-item-desc{font-size:11px!important;color:var(--ai-chat-muted)!important}
+.ai-chat-theme .ai-think-body,.ai-chat-theme.ai-think-streaming{padding-block:12px;padding-inline:16px}
+.ai-question-card .ai-question-option{display:flex;align-items:center;min-height:44px;margin-inline-end:0}
+.ai-question-card .ai-question-option .ant-radio{align-self:center;flex-shrink:0;top:auto}
+.ai-question-card .ai-question-option > span:last-child{min-width:0;overflow-wrap:anywhere;line-height:1.5}
 .ai-welcome-container .ant-welcome{padding:8px 4px!important}
 .ai-welcome-container .ant-prompts-item:hover{border-color:rgb(var(--brand-500-rgb))!important}
 .ai-xmarkdown-body{font-size:14px;line-height:1.9;overflow-wrap:anywhere}

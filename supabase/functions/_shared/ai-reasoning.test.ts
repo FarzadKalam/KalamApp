@@ -120,15 +120,15 @@ describe('central model-specific thinking contract',() => {
   });
   it('routes the actual shared gateway through native thinking without changing the chosen model',async () => {
     const source=readFileSync(new URL('../ai-assistant/index.ts',import.meta.url),'utf8');
-    const code=source.slice(source.indexOf('const requestAvalaiWithFallback ='),source.indexOf('const getServiceHeaders ='));
+    const code=source.slice(source.indexOf('const requestAiProvider ='),source.indexOf('const getServiceHeaders ='));
     const fetch=vi.fn(async () => new Response(JSON.stringify({ id: 'result',content: [{ type: 'text',text: 'پاسخ' }],stop_reason: 'end_turn',usage: { input_tokens: 5,output_tokens: 10 } })));
     vi.stubGlobal('fetch',fetch);
     const deps={ prepareReasoningTransport,bridgeReasoningResponse,DEFAULT_AI_BASE_URL: 'https://provider.test/v1',
       uniqueBaseUrls: (values:string[]) => values,normalizeBaseUrl: (value:string) => value,isRetryableProviderStatus: () => false,isProviderTimeoutError: () => false };
-    const run=new Function(...Object.keys(deps),ts.transpileModule(code+'\nreturn requestAvalaiWithFallback;',{
+    const run=new Function(...Object.keys(deps),ts.transpileModule(code+'\nreturn requestAiProvider;',{
       compilerOptions: { target: ts.ScriptTarget.ES2022 },
     }).outputText)(...Object.values(deps));
-    const result=await run({ model: 'claude-haiku-5-5',apiKey: 'test-only',reasoningModelId: 'claude-haiku-5-5',reasoningEffort: 'low' },'/chat/completions',{
+    const result=await run({ provider: 'avalai',baseUrl: 'https://provider.test/v1',model: 'claude-haiku-5-5',apiKey: 'test-only',reasoningModelId: 'claude-haiku-5-5',reasoningEffort: 'low' },'/chat/completions',{
       method: 'POST',headers: { Authorization: 'Bearer test-only' },body: JSON.stringify({ model: 'claude-haiku-5-5',max_tokens: 4096,messages: [{ role: 'user',content: 'سؤال' }] }),
     });
     const [url,init]=fetch.mock.calls[0] as any;

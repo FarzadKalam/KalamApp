@@ -5,6 +5,7 @@ import {
   type AgentKey,
 } from './ai-agent-catalog.ts';
 import type { CentralAiGrounding } from './ai-grounding.ts';
+import { isCalendarPlanningRequest } from './ai-content-calendar.ts';
 
 export const heuristicSelectAgentsAndCapabilities = (params: {
   message: string;
@@ -28,12 +29,13 @@ export const heuristicSelectAgentsAndCapabilities = (params: {
 
   const moduleId = String(params.pageContext?.moduleId || '').trim();
 
-  if (moduleId === 'instagram_conversations' || /(اینستاگرام|اینستا|استوری|ریل|کامنت|دایرکت\s*اینستا|ویترین|boxapi)/i.test(text)) {
+  const calendarRequest = moduleId === 'content_calendars' && isCalendarPlanningRequest(text);
+  if (moduleId === 'content_calendars' || moduleId === 'instagram_conversations' || /(اینستاگرام|اینستا|استوری|ریل|کامنت|دایرکت\s*اینستا|ویترین|boxapi)/i.test(text)) {
     detectedAgents.add('instagrammer');
     if (/(بساز|ساخت|قانون|شرط|ویترین|کارت|پاسخ\s*خودکار)/i.test(text)) detectedCaps.add('record_creation');
   }
-  if (['invoices', 'customers', 'marketing_leads', 'sales_return_invoices', 'price_lists', 'product_bundles'].includes(moduleId)
-    || /(فاکتور|پیش[‌ ]?فاکتور|فروش|لید|سرنخ|مشتری|تخفیف|تسویه|رسید\s*پرداخت|برگشت\s*از\s*فروش)/i.test(text)) {
+  if (['invoices', 'customers', 'marketing_leads', 'sales_return_invoices', 'price_lists', 'product_bundles', 'advertising_campaigns', 'advertising_campaign_tools', 'advertising_campaign_responses'].includes(moduleId)
+    || /(کمپین|فاکتور|پیش[‌ ]?فاکتور|فروش|لید|سرنخ|مشتری|تخفیف|تسویه|رسید\s*پرداخت|برگشت\s*از\s*فروش)/i.test(text)) {
     detectedAgents.add('sales_leads');
     if (/(بزن|بساز|ایجاد|تسویه|صدور|ثبت|برگشت)/i.test(text)) detectedCaps.add('record_creation');
   }
@@ -70,6 +72,10 @@ export const heuristicSelectAgentsAndCapabilities = (params: {
   if (/(الگوی\s*فرآیند|فرآیند\s*کامل|پروژه\s*از\s*روی\s*الگو)/i.test(text)) {
     detectedCaps.add('process_operation');
     detectedCaps.add('record_creation');
+  }
+  if (calendarRequest) {
+    detectedCaps.add('process_operation');
+    if (!explicitCaps.includes('record_creation')) detectedCaps.delete('record_creation');
   }
 
   // An explicitly addressed specialist owns the request. Channel names in a

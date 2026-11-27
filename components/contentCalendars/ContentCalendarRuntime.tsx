@@ -1,3 +1,4 @@
+import { CALENDAR_CONTENT_TYPES } from '../../supabase/functions/_shared/ai-content-calendar';
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   App,
@@ -95,14 +96,6 @@ type CalendarClipboard = {
   kind: "task" | "project";
   record: any;
 };
-const CONTENT_TYPES = [
-  { value: "post", label: "پست" },
-  { value: "story", label: "استوری" },
-  { value: "video", label: "ویدئو" },
-  { value: "article", label: "مقاله" },
-  { value: "newsletter", label: "خبرنامه" },
-  { value: "other", label: "سایر" },
-];
 const asDate = (value: any) => {
   const date = value ? new Date(value) : null;
   return date && !Number.isNaN(date.getTime()) ? date : null;
@@ -152,7 +145,7 @@ const formatTime = (value: any) => {
   return date ? toPersian(date).format("HH:mm") : "";
 };
 const formatContentType = (value: any) =>
-  CONTENT_TYPES.find((item) => item.value === String(value || ""))?.label ||
+  CALENDAR_CONTENT_TYPES.find((item) => item.value === String(value || ""))?.label ||
   String(value || "").trim();
 const asObject = (value: any): Record<string, any> =>
   value && typeof value === "object" && !Array.isArray(value) ? value : {};
@@ -328,12 +321,16 @@ const ContentCalendarRuntime: React.FC<{
     void load();
   }, [calendarId]);
   useEffect(() => {
-    const onProjectCreated = (event: Event) => {
-      const createdCalendarId = String((event as CustomEvent)?.detail?.calendarId || "").trim();
-      if (createdCalendarId && createdCalendarId === calendarId) void load();
+    const onCalendarChanged = (event: Event) => {
+      const changedCalendarId = String((event as CustomEvent)?.detail?.calendarId || "").trim();
+      if (changedCalendarId && changedCalendarId === calendarId) void load(true);
     };
-    window.addEventListener("content-calendar-project-created", onProjectCreated);
-    return () => window.removeEventListener("content-calendar-project-created", onProjectCreated);
+    window.addEventListener("content-calendar-project-created", onCalendarChanged);
+    window.addEventListener("content-calendar-draft-saved", onCalendarChanged);
+    return () => {
+      window.removeEventListener("content-calendar-project-created", onCalendarChanged);
+      window.removeEventListener("content-calendar-draft-saved", onCalendarChanged);
+    };
   }, [calendarId]);
   useEffect(() => {
     if (!calendarId) return undefined;
@@ -420,7 +417,7 @@ const ContentCalendarRuntime: React.FC<{
         );
         if (!date) return;
         entries.push({
-          id: `calendar:${String(draftStage?.process_node_key || draftStage?.id || index)}`,
+          id: `calendar:${String(draftStage?.id || draftStage?.process_node_key || index)}`,
           kind: "calendar_draft",
           record: draftStage,
           draftStage,
@@ -534,8 +531,8 @@ const ContentCalendarRuntime: React.FC<{
     try {
       const dateKey = toKey(effectiveCreateDate);
       const defaultSchedule = {
-        start_date: `${dateKey}T09:00:00`,
-        due_date: `${dateKey}T17:00:00`,
+        start_date: targetStage?.start_date || `${dateKey}T09:00:00`,
+        due_date: targetStage?.due_date || `${dateKey}T17:00:00`,
       };
       const context = await ensureProcessRunForDraftStageGroup({
         supabaseClient: supabase,
@@ -784,6 +781,7 @@ const ContentCalendarRuntime: React.FC<{
       targetStage: selectedDraft,
       processTitle: "فعالیت‌های تقویم محتوایی",
       scheduleDate: item.date,
+      contentType: selectedDraft.content_type || selectedDraft.metadata?.content_type || null,
       onDraftSaved: async (overrides) => {
         await updateDraftInOwner("content_calendars", calendarId, selectedDraft, overrides);
       },
@@ -954,7 +952,7 @@ const ContentCalendarRuntime: React.FC<{
         <span className="min-w-0 flex-1"><span className="block line-clamp-2 font-bold text-gray-700 dark:text-gray-100">{title}</span>{isDraft && isProjectDraft ? <span className="block truncate text-[9px] text-slate-600 dark:text-slate-300">پروژه: {getRecordTitle(item.project, MODULES.projects, { fallback: "پروژه" })}</span> : assignee.label ? <span className="block truncate text-[9px] text-gray-500 dark:text-gray-400">مسئول: {assignee.label}</span> : null}</span>
       </div>
       <div className="mt-1 flex flex-wrap gap-x-2 text-[9px] text-gray-500 dark:text-gray-400">
-        {isTask && formatContentType(record.content_type) ? <span>نوع محتوا: {formatContentType(record.content_type)}</span> : null}
+        {(isTask || item.kind === "calendar_draft") && formatContentType(record.content_type) ? <span>نوع محتوا: {formatContentType(record.content_type)}</span> : null}
         {formatTime(record.due_date) ? <span>موعد: {formatTime(record.due_date)}</span> : null}
         {label ? <span style={{ color }}>{label}</span> : null}
         {linkedProject ? <button type="button" onClick={(event) => { event.stopPropagation(); navigate(`/projects/${linkedProject.id}`); }} className="font-bold text-[rgb(var(--brand-700-rgb))] underline decoration-dotted underline-offset-2 dark:text-[rgb(var(--brand-200-rgb))]">پروژه: {getRecordTitle(linkedProject, MODULES.projects, { fallback: "پروژه" })}</button> : null}
@@ -1313,7 +1311,7 @@ const ContentCalendarRuntime: React.FC<{
               className="w-full"
               value={rawContentType}
               onChange={setRawContentType}
-              options={CONTENT_TYPES}
+              options={[...CALENDAR_CONTENT_TYPES]}
               placeholder="نوع محتوا"
             /> : null}
             <Button

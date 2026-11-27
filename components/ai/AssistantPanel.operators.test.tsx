@@ -48,7 +48,8 @@ vi.mock('../../utils/aiFileAttachments', () => ({
   uploadAiFileAttachments: vi.fn(async () => [{ url: 'https://example.test/voice.webm', assetId: 'voice-asset', entryId: 'voice-entry' }]),
 }));
 
-vi.mock('../../utils/aiRecordCreation', () => ({
+vi.mock('../../utils/aiRecordCreation', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../utils/aiRecordCreation')>(),
   buildAiRecordModuleOptions: vi.fn(() => [{ label: 'مشتریان', value: 'customers' }]),
   buildAiRecordCreationSchema: vi.fn((moduleId: string) => ({ moduleId, fields: [{ key: 'name', label: 'نام' }] })),
 }));
@@ -480,6 +481,29 @@ describe('AssistantPanel AI operators', () => {
     await waitFor(() => expect(findBody('confirm_action')).toBeTruthy());
     expect(findBody('confirm_action').proposedRecords).toHaveLength(2);
     expect(getBodies().filter((body) => body.action === 'confirm_action')).toHaveLength(1);
+  });
+
+  it('continues a bundled invoice question with the typed value on the same mutation path', async () => {
+    await renderPanel();
+    const threadId = '11111111-1111-4111-8111-111111111111';
+    const messageId = '22222222-2222-4222-8222-222222222222';
+    invokeMock.mockImplementation(async (_name: string, options: any) => {
+      if (options?.body?.action === 'suggest_auto_capabilities') return { data: { success: true, capabilities: ['record_creation'], targetModuleId: 'invoices' }, error: null };
+      if (options?.body?.action === 'run_task_bundle') return { data: {
+        success: true, threadId, messageId, answer: 'تاریخ فاکتور را مشخص کنید.',
+        questions: [{ title: 'تاریخ فاکتور چه روزی است؟', fieldKey: 'invoice_date', options: [] }],
+        clarificationForm: { actionType: 'create_record_from_prompt', moduleId: 'invoices',
+          fields: [{ key: 'invoice_date', label: 'تاریخ فاکتور', type: 'date' }] },
+      }, error: null };
+      return { data: { success: true, threadId, answer: 'اطلاعات دریافت شد.' }, error: null };
+    });
+    await typeAndSend('فاکتور ایجاد کن');
+    fireEvent.change(await screen.findByRole('textbox', { name: 'تاریخ فاکتور' }), { target: { value: '2026-11-27' } });
+    fireEvent.click(screen.getByRole('button', { name: 'ارسال پاسخ‌ها' }));
+    await waitFor(() => expect(findBody('create_record_from_prompt')).toMatchObject({
+      threadId, recordCreation: { moduleId: 'invoices' }, previewOnly: true,
+      clarification: { messageId, fieldAnswers: { question_1: '2026-11-27' } },
+    }));
   });
 
   it('routes an insurance expense to an editable expense draft instead of a manual CRM reply', async () => {

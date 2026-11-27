@@ -33,6 +33,16 @@ export type AiRecordCreationSchema = {
   contextFields?: AiRecordFieldSpec[];
 };
 
+/** The server chooses the allowed fields. Keep renderer settings from the module definition. */
+export const resolveAiRecordEditorField = (moduleId: string, spec: AiRecordFieldSpec): ModuleField => {
+  const configured = MODULES[moduleId]?.fields?.find(field => field.key === spec.key);
+  const field = { ...configured, ...spec, labels: { ...configured?.labels, fa: spec.label || configured?.labels?.fa || spec.key } } as ModuleField;
+  if (spec.relationTargetModule) {
+    field.relationConfig = { ...field.relationConfig, targetModule: spec.relationTargetModule };
+  }
+  return { ...field, labels: { ...field.labels, fa: getFieldLabelFa(field, { moduleId }) } };
+};
+
 const SYSTEM_FIELD_KEYS = new Set([
   'id',
   'org_id',

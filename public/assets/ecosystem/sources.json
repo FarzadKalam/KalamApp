@@ -3,6 +3,21 @@
   "note": "Brand marks identify technologies and integrations; no partnership is implied. Simple Icons: CC0; Lobe Icons: MIT, trademarks belong to their owners. Other marks are website icons from the named official sites.",
   "sources": [
     {
+      "name": "openrouter",
+      "url": "https://raw.githubusercontent.com/simple-icons/simple-icons/develop/icons/openrouter.svg",
+      "retrievedAt": "2026-11-27"
+    },
+    {
+      "name": "cloudflare",
+      "url": "https://raw.githubusercontent.com/simple-icons/simple-icons/develop/icons/cloudflare.svg",
+      "retrievedAt": "2026-11-27"
+    },
+    {
+      "name": "llm7",
+      "url": "https://llm7.io/favicon.ico",
+      "retrievedAt": "2026-11-27"
+    },
+    {
       "name": "nginx",
       "url": "https://cdn.jsdelivr.net/npm/simple-icons@v16/icons/nginx.svg"
     },

@@ -88,8 +88,9 @@ export const AI_ACTIVITY_ACTION_BY_CAPABILITY: Record<AiAgentId, AiActivityActio
 
 export type AiAgentActivity = {
   agentId: AiAgentId;
-  phase: 'started' | 'completed';
+  phase: 'started' | 'completed' | 'failed';
   at: number;
+  stepId?: string;
   actionType?: AiActivityActionType;
   detail?: string;
 };
@@ -98,21 +99,27 @@ export function parseAiAgentActivity(value: unknown): AiAgentActivity | null {
   if (!value || typeof value !== 'object') return null;
   const item = value as Record<string, unknown>;
   if (typeof item.agentId !== 'string' || !Object.prototype.hasOwnProperty.call(AI_AGENTS, item.agentId)) return null;
-  if (item.phase !== 'started' && item.phase !== 'completed') return null;
+  if (item.phase !== 'started' && item.phase !== 'completed' && item.phase !== 'failed') return null;
   if (typeof item.at !== 'number' || !Number.isFinite(item.at)) return null;
   return {
     agentId: item.agentId as AiAgentId,
     phase: item.phase,
     at: item.at,
+    ...(typeof item.stepId === 'string' && item.stepId ? { stepId: item.stepId } : {}),
     ...(typeof item.actionType === 'string' ? { actionType: item.actionType as AiActivityActionType } : {}),
     ...(typeof item.detail === 'string' && item.detail.trim() ? { detail: item.detail.trim() } : {}),
   };
 }
 
-/** Only observed execution events; concurrent activities remain visible until each finishes. */
+/** Preserve execution order and update only the activity that emitted a terminal event. */
 export function applyAiAgentActivity(current: AiAgentActivity[], event: AiAgentActivity): AiAgentActivity[] {
-  const others = current.filter(item => item.agentId !== event.agentId);
-  return event.phase === 'started' ? [...others, event] : others;
+  const index = event.stepId
+    ? current.findIndex(item => item.stepId === event.stepId)
+    : current.findIndex(item => !item.stepId && item.phase === 'started' && item.agentId === event.agentId
+      && item.actionType === event.actionType && item.detail === event.detail);
+  if (index === -1 || (!event.stepId && event.phase === 'started')) return [...current, event];
+  if (event.phase === 'started' || current[index].phase !== 'started') return current;
+  return current.map((item, position) => position === index ? { ...item, phase: event.phase } : item);
 }
 
 export type AiAgentActivityReporter = (event: AiAgentActivity) => void;
@@ -124,7 +131,14 @@ export async function withAiAgentActivity<T>(
 ): Promise<T> {
   const actionType = options?.actionType || AI_ACTIVITY_ACTION_BY_CAPABILITY[agentId];
   const detail = options?.detail;
-  report?.({ agentId, phase: 'started', at: Date.now(), actionType, detail });
-  try { return await work(); }
-  finally { report?.({ agentId, phase: 'completed', at: Date.now(), actionType, detail }); }
+  const step = { agentId, stepId: report ? crypto.randomUUID() : undefined, actionType, detail };
+  report?.({ ...step, phase: 'started', at: Date.now() });
+  try {
+    const result = await work();
+    report?.({ ...step, phase: 'completed', at: Date.now() });
+    return result;
+  } catch (error) {
+    report?.({ ...step, phase: 'failed', at: Date.now() });
+    throw error;
+  }
 }

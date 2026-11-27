@@ -3,7 +3,6 @@ import { Button, Input, Tooltip } from 'antd';
 import { Suggestion, type SuggestionProps } from '@ant-design/x';
 import { ArrowUpOutlined } from '@ant-design/icons';
 import { AiComposerSlots } from './AiComposerSlots';
-import { shouldSubmitComposerOnEnter } from '../../utils/composeKeyboard';
 import './AiMessageComposer.css';
 
 export type AiComposerSuggestionItem = NonNullable<SuggestionProps<string>['items']> extends (infer U) | ((...args: any[]) => any)
@@ -111,20 +110,26 @@ export default function AiMessageComposer({
       aria-label="پیام به دستیار هوشمند"
       autoSize={{ minRows: 1, maxRows }}
       onKeyDown={(event) => {
-        if (suggestionOpen && triggerProps?.onKeyDown && ['ArrowUp', 'ArrowDown', 'Enter', 'Escape'].includes(event.key)) {
-          triggerProps.onKeyDown(event);
-          if (event.key === 'Enter' || event.key === 'Escape') {
-            event.preventDefault();
-          }
+        if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+        const enter = event.key === 'Enter';
+        const sendShortcut = enter && event.ctrlKey && !event.shiftKey && !event.altKey && !event.metaKey;
+        if (sendShortcut) {
+          event.preventDefault();
+          if (event.repeat || busy || disabled || !canSubmit) return;
+          setSuggestionOpen(false);
+          submit();
           return;
         }
-        if (!shouldSubmitComposerOnEnter(event) || busy || disabled || !canSubmit) return;
-        event.preventDefault();
-        submit();
-      }}
-      onPressEnter={(event) => {
-        if (suggestionOpen) {
-          event.preventDefault();
+        if (suggestionOpen && enter && event.shiftKey) {
+          triggerProps?.onTrigger?.(false);
+          setSuggestionOpen(false);
+          return;
+        }
+        if (suggestionOpen && triggerProps?.onKeyDown && ['ArrowUp', 'ArrowDown', 'Enter', 'Escape'].includes(event.key)) {
+          triggerProps.onKeyDown(event);
+          if (enter || event.key === 'Escape') {
+            event.preventDefault();
+          }
         }
       }}
     />
@@ -164,13 +169,14 @@ export default function AiMessageComposer({
         <div className="ai-composer-footer">
           <div className="ai-composer-tools">{tools}</div>
           <div className="ai-composer-model">{model}</div>
-          <Tooltip title={sendLabel}>
+          <Tooltip title={`${sendLabel} (Ctrl+Enter)`}>
             <Button
               type="primary"
               shape="circle"
               className="ai-composer-send"
               icon={<ArrowUpOutlined />}
               aria-label={sendLabel}
+              aria-keyshortcuts="Control+Enter"
               disabled={!canSubmit || disabled}
               loading={busy}
               onClick={submit}

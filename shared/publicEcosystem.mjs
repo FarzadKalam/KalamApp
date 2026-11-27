@@ -32,6 +32,9 @@ export const PUBLIC_ECOSYSTEM_GROUPS = [
       { id: 'elevenlabs', name: 'الون‌لبز', logo: logo('elevenlabs.svg'), status: 'supported', description: 'تولید صدای طبیعی در مدل‌های صوتی قابل انتخاب.' },
       { id: 'nvidia', name: 'انویدیا', logo: logo('nvidia.svg'), status: 'supported', description: 'خانوادهٔ نماترون در فهرست مدل‌های ایجنت‌ها.' },
       { id: 'glm', name: 'جی‌ال‌ام', logo: logo('glm.svg'), status: 'supported', description: 'مدل‌های سریع گفتگو و پردازش وظایف ایجنت‌ها.' },
+      { id: 'openrouter', name: 'اوپن‌روتر', logo: logo('openrouter.svg'), status: 'supported', description: 'انتخاب مدل‌های متنی اوپن‌روتر با تنظیم مدیر سامانه.' },
+      { id: 'llm7', name: 'ال‌ال‌ام‌۷', logo: logo('llm7.ico'), status: 'supported', description: 'انتخاب مدل‌های متنی LLM7.io با تنظیم مدیر سامانه.' },
+      { id: 'cloudflare-ai', name: 'هوش مصنوعی کلادفلر', logo: logo('cloudflare.svg'), status: 'supported', description: 'اجرای مدل‌های متنی Workers AI با حساب کلادفلر تنظیم‌شده در سامانه.' },
     ],
   },
   {

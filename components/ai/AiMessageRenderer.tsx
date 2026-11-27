@@ -75,7 +75,7 @@ const AiMessageRenderer: React.FC<AiMessageRendererProps> = ({
 }) => {
   const normalizedText = String(text || '').trim();
   const hasText = normalizedText.length > 0;
-  const hasCompletedActivities = !streaming && Array.isArray(activities) && activities.some((item) => item.phase === 'completed');
+  const hasActivityHistory = Boolean(activities?.length);
 
   const markdownComponents = useMemo(() => ({
     pre: ({ children }: ComponentProps) => <>{children}</>,
@@ -154,7 +154,7 @@ const AiMessageRenderer: React.FC<AiMessageRendererProps> = ({
 
   return (
     <div className="ai-message-renderer min-w-0">
-      {(streaming || hasCompletedActivities) && (
+      {(streaming || hasActivityHistory) && (
         <AiActivityStatus
           agentId={agentId}
           activities={activities}

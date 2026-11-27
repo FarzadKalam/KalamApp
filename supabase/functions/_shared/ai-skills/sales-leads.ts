@@ -150,8 +150,8 @@ export const salesLeadsSkill: DomainSkillModule = {
   titleFa: 'ایجنت بازاریابی و فروش',
   buildContractPrompt: () => [
     '## قرارداد تخصصی ایجنت بازاریابی و فروش',
-    '1. **کمپین‌های بازاریابی و تبلیغات (`campaigns`)**:',
-    '   - تحلیل عملکرد کمپین‌های تبلیغاتی (بودجه، هزینه‌کرد، کانال تبلیغاتی، نرخ جذب لید و هزینه به ازای هر لید CPA).',
+    '1. **کمپین‌های بازاریابی و تبلیغات (`advertising_campaigns`)**:',
+    '   - کمپین را با ابزار read_organization_data از advertising_campaigns بخوان. ابزارهای اجرا و هزینه‌ها را از advertising_campaign_tools و پاسخ‌ها را از advertising_campaign_responses با campaign_id همان کمپین بخوان. هزینه به‌ازای سرنخ فقط با هزینه واقعی و تعداد سرنخ منتسب گزارش شود.',
     '   - اتصال لیدهای جذب‌شده به کمپین‌های مربوطه و پیشنهاد بهبود نرخ تبدیل سرنخ‌ها به مشتری و صدور پیش‌فاکتور.',
     '2. **پیش‌فاکتور و فاکتور فروش (`invoices`)**:',
     '   - همیشه نرخ کالا را از ۳ منبع «قیمت پایه محصول»، «لیست‌های قیمت فعال» و «آخرین فروش به همان مشتری» بررسی کن. اگر بین قیمت‌ها تفاوت بود یا کاربر اولویت را تعیین نکرده، قیمت‌ها را مقایسه کن و از کاربر بپرس کدام اعمال شود.',
@@ -180,7 +180,6 @@ export const salesLeadsSkill: DomainSkillModule = {
       openInvoices,
       openLeads,
       processTemplates,
-      campaigns,
     ] = await Promise.all([
       canViewModuleWithPlan(plan, perms, 'customers')
         ? sharedRestSelect(ctx.supabaseUrl, ctx.serviceRoleKey, 'customers', {
@@ -224,7 +223,7 @@ export const salesLeadsSkill: DomainSkillModule = {
       canViewModuleWithPlan(plan, perms, 'marketing_leads')
         ? sharedRestSelect(ctx.supabaseUrl, ctx.serviceRoleKey, 'marketing_leads', {
             org_id: `eq.${orgId}`,
-            select: 'id,full_name,business_name,name,system_code,status,mobile_1,campaign_id,updated_at',
+            select: 'id,full_name,business_name,name,system_code,status,mobile_1,updated_at',
             order: 'updated_at.desc',
             limit: 10,
           })
@@ -237,14 +236,6 @@ export const salesLeadsSkill: DomainSkillModule = {
             limit: 12,
           })
         : Promise.resolve([]),
-      canViewModuleWithPlan(plan, perms, 'campaigns')
-        ? sharedRestSelect(ctx.supabaseUrl, ctx.serviceRoleKey, 'campaigns', {
-            org_id: `eq.${orgId}`,
-            select: 'id,name,title,system_code,budget,status,start_date,end_date,channel',
-            order: 'updated_at.desc',
-            limit: 10,
-          })
-        : Promise.resolve([]),
     ]);
 
     if (customers.length) bundle.customers_sample = customers;
@@ -253,7 +244,6 @@ export const salesLeadsSkill: DomainSkillModule = {
     if (bundles.length) bundle.product_bundles_count = bundles.length;
     if (openInvoices.length) bundle.recent_invoices = openInvoices;
     if (openLeads.length) bundle.recent_leads = openLeads;
-    if (campaigns.length) bundle.active_campaigns = campaigns;
     if (processTemplates.length) {
       bundle.project_process_templates = processTemplates.filter(
         (t) => t.module_id === 'projects' || (Array.isArray(t.module_ids) && t.module_ids.includes('projects')),

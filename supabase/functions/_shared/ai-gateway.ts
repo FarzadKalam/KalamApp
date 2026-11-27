@@ -78,16 +78,6 @@ const GENERIC_REASONING_NAME_PATTERNS = [
   /grok.*\breason/i,
 ];
 
-const readEnv = (key: string): string => {
-  try {
-    const deno = (globalThis as any).Deno;
-    if (deno?.env?.get) return String(deno.env.get(key) || '').trim();
-  } catch {
-    // ignore in non-Deno runtimes
-  }
-  return '';
-};
-
 export const isCatalogDefaultFor = (model: AiModelCatalogRow, tag: string): boolean =>
   Array.isArray(model?.metadata?.default_capability_tags)
   && model.metadata!.default_capability_tags.includes(tag);
@@ -473,11 +463,3 @@ export const calculateCacheSavingsIrt = (params: {
   const withMargin = irtRawSaved * (1 + Math.max(0, Number(params.marginPercent || 0)) / 100);
   return Math.max(0, Math.round(withMargin));
 };
-
-export const getCentralAiProviderEnv = () => ({
-  provider: readEnv('AI_PROVIDER') || readEnv('AVALAI_PROVIDER') || 'avalai',
-  baseUrl: readEnv('AI_BASE_URL') || readEnv('AVALAI_BASE_URL') || 'https://api.avalai.ir/v1',
-  fallbackBaseUrl: readEnv('AI_FALLBACK_BASE_URLS') || readEnv('AVALAI_FALLBACK_BASE_URL') || 'https://api.avalapis.ir/v1',
-  apiKey: readEnv('AI_API_KEY') || readEnv('AVALAI_API_KEY') || readEnv('OPENAI_API_KEY') || '',
-  serviceTier: readEnv('AVALAI_SERVICE_TIER') || readEnv('AI_SERVICE_TIER') || 'default',
-});

@@ -1,5 +1,6 @@
 import React from 'react';
 import { Checkbox, Empty } from 'antd';
+import { CALENDAR_CONTENT_TYPES } from '../../supabase/functions/_shared/ai-content-calendar';
 
 type Props = {
   operations: any[];
@@ -10,6 +11,8 @@ type Props = {
 const getOperationTitle = (operation: any, index: number) => {
   const type = String(operation?.type || '').trim();
   const name = String(operation?.process_name || operation?.name || operation?.stage?.name || '').trim();
+  if (type === 'schedule_calendar_content') return `افزودن به تقویم · ${name}`;
+  if (type === 'create_calendar_template') return `ساخت الگوی تقویم · ${name}`;
   if (type === 'materialize_template_to_tasks') return `ساخت فعالیت‌ها از الگو${name ? `: ${name}` : ''}`;
   if (type === 'create_raw_process_with_tasks') return `ساخت برنامهٔ محتوا${name ? `: ${name}` : ''}`;
   if (type === 'add_stage_task') return `افزودن فعالیت${name ? `: ${name}` : ''}`;
@@ -20,6 +23,16 @@ const getOperationTitle = (operation: any, index: number) => {
 };
 
 const getOperationDetails = (operation: any) => {
+  if (operation?.type === 'schedule_calendar_content') {
+    const format = (value: string) => new Intl.DateTimeFormat('fa-IR', {
+      timeZone: 'Asia/Tehran', dateStyle: 'medium', timeStyle: 'short',
+    }).format(new Date(`${value}+03:30`));
+    return [
+      CALENDAR_CONTENT_TYPES.find(item => item.value === operation.content_type)?.label,
+      `از ${format(operation.start_date)} تا ${format(operation.due_date)}`,
+      operation.template_name, operation.template_stage_name,
+    ].filter(Boolean).join(' · ');
+  }
   const stages = Array.isArray(operation?.stages) ? operation.stages : [];
   const stageNames = stages
     .map((stage: any) => String(stage?.name || stage?.stage_name || '').trim())

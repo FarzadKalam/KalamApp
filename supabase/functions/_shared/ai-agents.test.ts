@@ -12,10 +12,14 @@ describe('shared AI agent contract', () => {
   });
   it('tracks parallel observed work without dropping another agent or accepting unknown events', () => {
     const first: AiAgentActivity = { agentId:'organization_data', phase:'started', at:1 };
-    const second: AiAgentActivity = { agentId:'organization_knowledge', phase:'started', at:2 };
+    const second: AiAgentActivity = { agentId:'organization_data', phase:'started', at:2, stepId:'second-read' };
     const active = applyAiAgentActivity([first],second);
     expect(active).toEqual([first,second]);
-    expect(applyAiAgentActivity(active,{...first,phase:'completed'})).toEqual([second]);
+    const completed = applyAiAgentActivity(active,{...first,phase:'completed',at:3});
+    expect(completed).toEqual([{ ...first, phase: 'completed' }, second]);
+    expect(applyAiAgentActivity(completed,{...second,phase:'completed',at:4})).toEqual([
+      { ...first, phase: 'completed' }, { ...second, phase: 'completed' },
+    ]);
     expect(parseAiAgentActivity({agentId:'fake',phase:'started',at:1})).toBeNull();
     expect(parseAiAgentActivity({...first,at:'secret'})).toBeNull();
     expect(parseAiAgentActivity({...first,phase:'unknown'})).toBeNull();
@@ -28,8 +32,9 @@ describe('shared AI agent contract', () => {
     release('result');
     await expect(request).resolves.toBe('result');
     expect(report.mock.calls.map(([event])=>event.phase)).toEqual(['started','completed']);
+    expect(report.mock.calls[0][0].stepId).toBe(report.mock.calls[1][0].stepId);
     report.mockClear();
     await expect(withAiAgentActivity('organization_data',async()=>{throw new Error('denied');},report)).rejects.toThrow('denied');
-    expect(report.mock.calls.map(([event])=>event.phase)).toEqual(['started','completed']);
+    expect(report.mock.calls.map(([event])=>event.phase)).toEqual(['started','failed']);
   });
 });

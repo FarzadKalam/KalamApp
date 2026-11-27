@@ -290,7 +290,7 @@ export const loadInstagramDomainContext = async (ctx: SkillExecutionContext): Pr
     }
 
     const nowIso = new Date().toISOString();
-    const [accounts, postsAndReels, activeStoryEvents, unresolvedComments, showcases, igWorkflows, contentCalendars] = await Promise.all([
+    const [accounts, postsAndReels, activeStoryEvents, unresolvedComments, showcases, igWorkflows] = await Promise.all([
       sharedRestSelect(ctx.supabaseUrl, ctx.serviceRoleKey, 'instagram_accounts', {
         org_id: `eq.${orgId}`,
         is_active: 'eq.true',
@@ -333,14 +333,6 @@ export const loadInstagramDomainContext = async (ctx: SkillExecutionContext): Pr
         order: 'updated_at.desc',
         limit: 25,
       }),
-      canViewModuleWithPlan(plan, perms, 'content_calendars')
-        ? sharedRestSelect(ctx.supabaseUrl, ctx.serviceRoleKey, 'content_calendars', {
-            org_id: `eq.${orgId}`,
-            select: 'id,title,scheduled_at,status,channel,media_type,caption,tags,assignee_id',
-            order: 'scheduled_at.desc',
-            limit: 20,
-          })
-        : Promise.resolve([]),
     ]);
 
     const accountUsernameById = new Map((accounts || []).map((a: any) => [String(a.id), String(a.username || '')]));
@@ -404,15 +396,6 @@ export const loadInstagramDomainContext = async (ctx: SkillExecutionContext): Pr
         is_active: w.is_active !== false,
         conditions_all: w.conditions_all,
         actions_count: Array.isArray(w.actions) ? w.actions.length : 0,
-      })),
-      content_calendar_items: (contentCalendars || []).map((c: any) => ({
-        id: c.id,
-        title: c.title,
-        scheduled_at: c.scheduled_at,
-        status: c.status,
-        channel: c.channel,
-        media_type: c.media_type,
-        caption: c.caption ? String(c.caption).slice(0, 120) : null,
       })),
     };
 };

@@ -55,4 +55,18 @@ describe('AiMessageRenderer', () => {
     fireEvent.click(screen.getByLabelText('تلاش دوباره'));
     expect(onRetry).toHaveBeenCalled();
   });
+
+  it('keeps completed stages visible while processing and accessible after the response', () => {
+    const stages = [
+      { agentId: 'organization_data', stepId: 'read', phase: 'completed', at: 1, detail: 'خواندن اطلاعات فاکتور' },
+      { agentId: 'web_search', stepId: 'search', phase: 'started', at: 2, detail: 'بررسی منابع تکمیلی' },
+    ] as const;
+    const { rerender } = render(<AiMessageRenderer text="" streaming activities={[...stages]} />);
+    expect(screen.getByText('خواندن اطلاعات فاکتور…')).toBeVisible();
+    expect(screen.getByText('بررسی منابع تکمیلی…')).toBeVisible();
+    rerender(<AiMessageRenderer text="پاسخ نهایی" activities={[stages[0], { ...stages[1], phase: 'completed' }]} />);
+    fireEvent.click(screen.getByRole('button', { name: /۲ مرحله بررسی و انجام شد/ }));
+    expect(screen.getByText('خواندن اطلاعات فاکتور…')).toBeVisible();
+    expect(screen.getByText('بررسی منابع تکمیلی…')).toBeVisible();
+  });
 });

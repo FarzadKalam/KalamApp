@@ -21,7 +21,7 @@ const harness = (streaming: boolean, responses: Response[], providerConfig: Reco
     appendContinuationText,createContinuationDeltaBuffer,
     createAiContextBudget: () => ({ outputTokens: 4000,prepare: async (messages: any[]) => messages }),
     executeAgentToolCalls, appendStreamToolCalls, buildAgentToolResultFallback,
-    requestAvalaiWithFallback: vi.fn(async (_config: any, _path: string, options: any) => {
+    requestAiProvider: vi.fn(async (_config: any, _path: string, options: any) => {
       sent.push(JSON.parse(options.body));
       const response = responses.shift(); if (!response) throw new Error('Unexpected provider call');
       return { response, baseUrl: 'test://' };
@@ -45,7 +45,7 @@ const harness = (streaming: boolean, responses: Response[], providerConfig: Reco
   const executable = ts.transpileModule(`${declaration}\nreturn ${streaming ? 'callChatCompletionsStream' : 'callChatCompletions'};`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
   const run = new Function(...Object.keys(deps), executable)(...Object.values(deps));
   return { sent, run: (options: any, messages = [{ role: 'user', content: 'همهٔ لیدها را بررسی کن' }]) =>
-    run({ model: 'chosen-agent', apiKey: 'fake-test', provider: 'fake', ...providerConfig }, messages, options) };
+    run({ model: 'chosen-agent', apiKey: 'fake-test', provider: 'avalai', ...providerConfig }, messages, options) };
 };
 
 describe('actual central agent data tool loop', () => {

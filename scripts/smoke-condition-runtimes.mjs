@@ -17,6 +17,15 @@ const cases = [
     )],
 ];
 
+if (process.env.VERIFY_AI_CALENDAR_RELEASE === 'true') {
+  const dummy = '00000000-0000-0000-0000-000000000001';
+  cases.push(
+    ['rest/v1/rpc/activate_saas_ai_provider_key', { p_provider: 'avalai', p_key_id: dummy }, [401, 403], (data) => data?.code === '42501'],
+    ['rest/v1/rpc/append_ai_content_calendar_draft', { p_calendar_id: dummy, p_draft: { id: dummy } }, [401, 403], (data) => data?.code === '42501'],
+    ['rest/v1/rpc/create_ai_content_calendar_template', { p_template_id: dummy, p_name: '', p_description: '', p_stages: [] }, [401, 403], (data) => data?.code === '42501'],
+  );
+}
+
 const mcpResponse = await fetch(`${url}/functions/v1/mcp-server/.well-known/oauth-protected-resource`, {
   signal: AbortSignal.timeout(15_000),
 });

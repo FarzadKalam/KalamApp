@@ -50,7 +50,7 @@ import AiRecordMutationApprovalCard from './AiRecordMutationApprovalCard';
 import AiRecordResultCard from './AiRecordResultCard';
 import { removeAiAttachmentCaptions } from '../../utils/aiMessageParts';
 import { normalizeIntakeAttachments } from '../../supabase/functions/_shared/ai-intake-attachments';
-import AiQuestionCard from './AiQuestionCard';
+import AiQuestionCard, { type AiQuestionForm } from './AiQuestionCard';
 import { normalizeAiQuestions, presentAiQuestionResponse } from '../../supabase/functions/_shared/ai-questions';
 import AiProcessOperationApprovalCard from './AiProcessOperationApprovalCard';
 import AiAgentTaskApprovalCard from './AiAgentTaskApprovalCard';
@@ -2001,7 +2001,9 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     shouldStickToBottomRef.current = node.scrollHeight - node.scrollTop - node.clientHeight < 96;
   }, []);
 
-  const submitChat = useCallback(async (rawText?: string, inputKind = 'text') => {
+  const submitChat = useCallback(async (rawText?: string, inputKind = 'text', clarification?: {
+    messageId: string; form: AiQuestionForm; fieldAnswers: Record<string, unknown>;
+  }) => {
     const text = String(rawText ?? input).trim();
     if (!text || submitting) return;
     const assistantText = pendingAiAction && (activeRecordCreationSchema || ['manage_agent_task', 'agent_task_batch'].includes(pendingAiAction.actionType))
@@ -2147,7 +2149,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       let plannedRecordMutationMode: 'create' | 'update' = pendingAiAction?.actionType === 'update_record_from_prompt'
         ? 'update'
         : 'create';
-      if (activeRecordCreationSchema) {
+      if (!clarification && activeRecordCreationSchema) {
         const route = await requestAutoRoute({
           messageText: assistantText,
           inputKind,
@@ -2162,7 +2164,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           } : item));
         }
       }
-      if (!processOperationMode && !activeRecordCreationSchema) {
+      if (!clarification && !processOperationMode && !activeRecordCreationSchema) {
         let streamCapabilities: AiComposerCapability[] = selectedCapabilities.filter((capability) => capability !== 'text_chat');
         let streamCapability = selectedCapabilities.includes('legal_assistant')
           ? 'legal_assistant'
@@ -2224,7 +2226,18 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         }
       }
 
-      const data = await (plannedAutoRoute && !processOperationMode && !activeRecordCreationSchema
+      const data = await (clarification ? callAssistant({
+        action: clarification.form.actionType,
+        message: assistantText,
+        inputKind,
+        threadId,
+        context: contextWithSelection,
+        ...(effectiveAgents.length ? { agents: effectiveAgents } : {}),
+        modelOverride: modelOverrideRef.current,
+        recordCreation: { moduleId: clarification.form.moduleId },
+        clarification: { messageId: clarification.messageId, fieldAnswers: clarification.fieldAnswers },
+        previewOnly: true,
+      }) : plannedAutoRoute && !processOperationMode && !activeRecordCreationSchema
         ? executeAutoRoute({
           messageText: assistantText,
           inputKind,
@@ -2349,6 +2362,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
             metadata: {
               usage: data.usage,
               clarification_questions: normalizeAiQuestions(data.questions),
+              clarification_form: data.clarificationForm,
               ...(data?.agentPlan ? { agent_plan: data.agentPlan } : {}),
               ...(Array.isArray(data?.selectedAgents) ? { selected_agents: data.selectedAgents } : {}),
               ...(data?.primaryAgent ? { agent_key: data.primaryAgent } : {}),
@@ -2386,6 +2400,10 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       streamAbortRef.current = null;
       const errorText = toFaErrorMessage(error, 'ارتباط با دستیار ناموفق بود.');
       message.error(errorText);
+      if (clarification) {
+        setMessages(prev => prev.filter(item => item.id !== userMessage.id && item.id !== thinkingMessage.id));
+        return false;
+      }
       const payload = error?.payload && typeof error.payload === 'object' ? error.payload : null;
       const payloadThreadId = String(payload?.threadId || payload?.thread?.id || '').trim();
       const serverMessages = Array.isArray(payload?.messages) ? payload.messages as ChatMessage[] : [];
@@ -2397,16 +2415,10 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         ]);
         return;
       }
-      setMessages((prev) => [
-        ...prev.filter((item) => item.id !== thinkingMessage.id),
-        {
-          id: `assistant-error-${Date.now()}`,
-          role: 'assistant',
-          content: errorText,
-          metadata: { failed: true },
-          created_at: new Date().toISOString(),
-        },
-      ]);
+      setMessages(prev => prev.map(item => item.id === thinkingMessage.id ? {
+        ...item, content: errorText,
+        metadata: { ...item.metadata, pending_status: false, streaming: false, failed: true },
+      } : item));
     } finally {
       setSubmitting(false);
     }
@@ -2884,6 +2896,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
             metadata: {
               usage: data.usage,
               clarification_questions: normalizeAiQuestions(data.questions),
+              clarification_form: data.clarificationForm,
               ...(data?.agentPlan ? { agent_plan: data.agentPlan } : {}),
               ...(Array.isArray(data?.selectedAgents) ? { selected_agents: data.selectedAgents } : {}),
               ...(data?.primaryAgent ? { agent_key: data.primaryAgent } : {}),
@@ -3056,6 +3069,12 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         ...(Array.isArray(data?.updatedRecords) ? data.updatedRecords : []),
       ];
       const executedOperationCount = Array.isArray(data?.operations) ? data.operations.length : 0;
+      const updatedCalendars = new Set<string>((Array.isArray(data?.operations) ? data.operations : [])
+        .filter((operation: any) => operation?.type === 'schedule_calendar_content' && operation.calendar_id)
+        .map((operation: any) => String(operation.calendar_id)));
+      updatedCalendars.forEach((calendarId) => {
+        window.dispatchEvent(new CustomEvent('content-calendar-draft-saved', { detail: { calendarId } }));
+      });
       const requiresRecordOrProcessResult = Boolean(pendingRecordMutationType || pendingProcessOperations.length > 0);
       if (
         (data?.executed !== true && data?.success !== true)
@@ -3203,6 +3222,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     const attachments = extractAiMessageAttachments(item);
     const rawMessageText = isUser ? removeAiAttachmentCaptions(normalizeAiMessageText(item.content), attachments) : normalizeAiMessageText(item.content);
     const presentation = !isUser ? presentAiQuestionResponse(rawMessageText) : { answer: rawMessageText, questions: [] };
+    const questions = isUser ? [] : normalizeAiQuestions(item.metadata?.clarification_questions || presentation.questions);
+    const clarificationForm = item.metadata?.clarification_form as AiQuestionForm | undefined;
     const messageText = !isUser && item.metadata?.streaming === true && /^\s*(?:```json\s*)?\{/.test(rawMessageText)
       ? 'در حال آماده‌سازی پاسخ…' : presentation.answer;
     const pendingKind = getPendingGenerationKind(item);
@@ -3314,10 +3335,11 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
             )}
             {!isUser ? <AiRecordResultCard metadata={item.metadata} /> : null}
             <MessageAttachmentGallery attachments={attachments} presentation={isUser ? undefined : 'assistant'} />
-            {!isUser && normalizeAiQuestions(item.metadata?.clarification_questions || presentation.questions).length > 0 ? (
-              <AiQuestionCard questions={normalizeAiQuestions(item.metadata?.clarification_questions || presentation.questions)}
+            {questions.length > 0 ? (
+              <AiQuestionCard questions={questions} form={clarificationForm}
                 disabled={submitting || messages.slice(index + 1).some((later) => later.role === 'user')}
-                onAnswer={(answer) => submitChat(answer, 'clarification_answer')} />
+                onAnswer={(answer, fieldAnswers) => submitChat(answer, 'clarification_answer',
+                  clarificationForm && fieldAnswers ? { messageId: item.id, form: clarificationForm, fieldAnswers } : undefined)} />
             ) : null}
 
             {!isUser ? (() => {

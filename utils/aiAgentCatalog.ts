@@ -148,8 +148,8 @@ export const AI_AGENT_CATALOG: readonly AiAgentDefinition[] = [
     descriptionFa: 'تسلط کامل بر کمپین‌های تبلیغاتی و بازاریابی، سرنخ‌ها (لید)، مشتری، لیست قیمت، پکیج‌ها، صدور پیش‌فاکتور/فاکتور، جدول پرداخت، برگشت از فروش و تبدیل به پروژه.',
     badgeColor: '#10b981',
     iconKey: 'shopping',
-    primaryModules: ['campaigns', 'marketing_leads', 'customers', 'invoices'],
-    optionalModules: ['billboards', 'billboard_status_changes', 'advertising_campaigns', 'products', 'price_lists', 'product_bundles', 'cash_bank_operations', 'sales_return_invoices', 'projects', 'process_templates', 'process_runs', 'tasks'],
+    primaryModules: ['advertising_campaigns', 'marketing_leads', 'customers', 'invoices'],
+    optionalModules: ['billboards', 'billboard_status_changes', 'advertising_campaign_tools', 'advertising_campaign_responses', 'products', 'price_lists', 'product_bundles', 'cash_bank_operations', 'sales_return_invoices', 'projects', 'process_templates', 'process_runs', 'tasks'],
     defaultCapabilities: ['record_creation', 'process_operation'],
     defaultToneStyle: 'friendly_warm',
     supportsBackground: true,
@@ -424,7 +424,6 @@ export const AI_AGENT_CATALOG: readonly AiAgentDefinition[] = [
     defaultToneStyle: 'friendly_warm',
     supportsBackground: true,
     supportsStaffBot: true,
-    requiredPlanFeatures: ['instagram_inbox'],
     defaultBackgroundConfig: {
       enabled: false,
       interval_minutes: 30,

@@ -1,5 +1,5 @@
 import {RECORD_CHOICE_GUIDANCE} from './ai-record-display.ts';
-export type AiQuestion = { id: string; title: string; options: string[] };
+export type AiQuestion = { id: string; title: string; options: string[]; fieldKey?: string };
 const visibleText = (value: unknown) => typeof value === 'string'
   ? value.replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, '').trim() : '';
 
@@ -12,12 +12,31 @@ export const normalizeAiQuestions = (input: unknown): AiQuestion[] => {
     titles.add(title);
     const options: string[] = Array.isArray(item?.options) ? item.options
       .map((option: any) => visibleText(typeof option === 'string' ? option : option?.label).slice(0, 160)).filter(Boolean) : [];
-    return [{ id: `question_${titles.size}`, title, options: Array.from(new Set(options)).slice(0, 3) }];
+    const fieldKey = typeof item?.fieldKey === 'string' && /^[a-zA-Z_][a-zA-Z0-9_]{0,79}$/.test(item.fieldKey) ? item.fieldKey : undefined;
+    return [{ id: `question_${titles.size}`, title, options: Array.from(new Set(options)).slice(0, 3), ...(fieldKey ? { fieldKey } : {}) }];
   }).slice(0, 4);
 };
 
 export const buildAiQuestionAnswer = (questions: AiQuestion[], answers: Record<string, string>) =>
-  questions.map((question) => `${question.title}\nپاسخ: ${String(answers[question.id] || '').trim()}`).join('\n\n');
+  questions.map((question) => `${question.title}\nپاسخ: ${visibleText(answers[question.id])}`).join('\n\n');
+
+export const bindAiRecordQuestions = (input: unknown[], fields: Array<{ key: string; label?: string }>) => {
+  const questionFields = new Set<string>();
+  const words = (value: string) => value.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+  return normalizeAiQuestions(input.flatMap(item => {
+    const raw = typeof item === 'string' ? { title: item } : item as { title?: string; question?: string; fieldKey?: string };
+    if (!raw || typeof raw !== 'object') return [];
+    const title = visibleText(raw.title || raw.question);
+    if (!title) return [];
+    const titleWords = ` ${words(title)} `;
+    const quoted = fields.filter(field => field.label && title.includes(`«${field.label}»`));
+    const matched = quoted.length ? quoted : fields.filter(field => field.label && titleWords.includes(` ${words(field.label)} `));
+    const field = fields.find(field => field.key === raw.fieldKey) || (matched.length === 1 ? matched[0] : undefined);
+    if (field && questionFields.has(field.key)) return [];
+    if (field) questionFields.add(field.key);
+    return [{ ...raw, fieldKey: field?.key }];
+  }));
+};
 
 export const AI_QUESTIONS_PROMPT = RECORD_CHOICE_GUIDANCE + '\n' + 'وقتی برای ادامه به پاسخ کاربر نیاز داری، فقط سؤال‌های ضروری و هنوز بی‌پاسخ را مطرح کن. برای نمایش پرسش تعاملی، فقط JSON با ساختار {"reply":"توضیح کوتاه فارسی","questions":[{"title":"پرسش","options":["گزینه اول","گزینه دوم"]}]} برگردان. options اختیاری است؛ گزینهٔ حدسی، شناسه یا UUID نساز. تأیید تغییر داده از مسیر کارت عملیاتی انجام می‌شود. در پاسخ عادی JSON تولید نکن.';
 

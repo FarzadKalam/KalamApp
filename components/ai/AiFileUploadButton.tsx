@@ -71,6 +71,7 @@ const AiFileUploadButton: React.FC<AiFileUploadButtonProps> = ({
         entryId: attachment.entryId || null,
         moduleId: attachment.moduleId || normalizedModuleId,
         recordId: attachment.recordId || normalizedRecordId,
+        preferNativeInput: normalizedModuleId === 'content_calendars',
       })));
     await dispatchPrepared(prepared);
   };

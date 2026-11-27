@@ -23,6 +23,10 @@ on:
         description: 'Apply only the approved phase 617 cash and bank ledger migration'
         type: boolean
         default: false
+      ai_calendar_release:
+        description: 'Publish the AI calendar and provider release with only phases 621 and 622'
+        type: boolean
+        default: false
       skip_browser_checks:
         description: 'Skip browser and screenshot checks when explicitly requested by the release owner'
         type: boolean
@@ -838,7 +842,7 @@ jobs:
             exit 1
           fi
 
-      - name: Apply the explicitly approved condition-table migrations
+      - name: Apply the explicitly approved migrations
         if: ${{ !inputs.frontend_only }}
         shell: pwsh
         env:
@@ -847,11 +851,15 @@ jobs:
           DEPLOY_USER: ${{ secrets.SERVER_USER }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $migrations = @('database_v1_phase615_customer_club_invoice_conditions.sql', 'database_v1_phase616_cash_bank_private_saved_views.sql', 'database_v1_phase619_saas_ai_provider_keys.sql', 'database_v1_phase620_external_mcp_access.sql')
+          $migrations = if ('${{ inputs.ai_calendar_release }}' -eq 'true') {
+            @('database_v1_phase621_atomic_saas_ai_provider_key_activation.sql', 'database_v1_phase622_ai_content_calendar_drafts.sql')
+          } else {
+            @('database_v1_phase615_customer_club_invoice_conditions.sql', 'database_v1_phase616_cash_bank_private_saved_views.sql', 'database_v1_phase619_saas_ai_provider_keys.sql', 'database_v1_phase620_external_mcp_access.sql')
+          }
           $migrations | ForEach-Object { Get-FileHash -Algorithm SHA256 -LiteralPath $_ } | Format-List
           & ./scripts/run-server-db-migrations.ps1 -SqlFiles $migrations
 
-      - name: Deploy report and workflow condition runtimes
+      - name: Deploy Edge Functions
         if: ${{ !inputs.frontend_only }}
         shell: pwsh
         env:
@@ -860,7 +868,13 @@ jobs:
           DEPLOY_USER: ${{ secrets.SERVER_USER }}
           DEPLOY_FUNCTIONS_PATH: /opt/kalamapp/supabase/docker/volumes/functions
           DEPLOY_FUNCTIONS_COMPOSE_DIR: /opt/kalamapp/supabase/docker
-        run: ./scripts/deploy-supabase-function.ps1 -Functions @('goal-progress','report-runtime','workflow-interval-runner','ai-assistant','bot-webhook','mcp-server','api-gateway')
+        run: |
+          $functions = if ('${{ inputs.ai_calendar_release }}' -eq 'true') {
+            @('workflow-interval-runner','ai-assistant','bot-webhook')
+          } else {
+            @('goal-progress','report-runtime','workflow-interval-runner','ai-assistant','bot-webhook','mcp-server','api-gateway')
+          }
+          ./scripts/deploy-supabase-function.ps1 -Functions $functions
 
       - uses: actions/setup-node@v4
         if: ${{ !inputs.frontend_only }}
@@ -872,6 +886,7 @@ jobs:
         env:
           DEPLOY_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           DEPLOY_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          VERIFY_AI_CALENDAR_RELEASE: ${{ inputs.ai_calendar_release }}
         run: node scripts/smoke-condition-runtimes.mjs
 
       - name: Recheck main before activating the frontend

@@ -11,6 +11,7 @@ import {
   CompassOutlined,
   DatabaseOutlined,
   DownOutlined,
+  ExclamationCircleOutlined,
   FileSearchOutlined,
   FileWordOutlined,
   FormOutlined,
@@ -100,6 +101,8 @@ export const getActivityLineText = (activity: AiAgentActivity): string => {
 const buildThoughtChainItems = (items: AiAgentActivity[], streaming: boolean): ThoughtChainItem[] =>
   items.map((item, idx) => {
     const isRunning = streaming && item.phase === 'started';
+    const isCompleted = item.phase === 'completed';
+    const isInterrupted = !isRunning && !isCompleted;
     const titleText = getActivityLineText(item);
     const agentLabel = getAiAgent(item.agentId).label;
     const actionLabel = item.actionType ? ACTION_LABEL_MAP[item.actionType] : '';
@@ -110,7 +113,7 @@ const buildThoughtChainItems = (items: AiAgentActivity[], streaming: boolean): T
         : undefined;
 
     return {
-      key: `${item.agentId}-${idx}`,
+      key: item.stepId || `${item.at}-${idx}`,
       icon: isRunning ? <LoadingOutlined spin /> : getActivityIcon(item),
       title: (
         <span className={isRunning ? 'font-semibold text-slate-800 dark:text-slate-100' : 'text-slate-600 dark:text-slate-300'}>
@@ -118,11 +121,13 @@ const buildThoughtChainItems = (items: AiAgentActivity[], streaming: boolean): T
         </span>
       ),
       description: descriptionText,
-      status: isRunning ? 'pending' : 'success',
+      status: isRunning ? 'pending' : isCompleted ? 'success' : 'error',
       extra: isRunning ? (
         <Tag color="processing" className="m-0 rounded-full text-[10px]">
           در حال اجرا
         </Tag>
+      ) : isInterrupted ? (
+        <ExclamationCircleOutlined className="text-[11px] text-amber-600 dark:text-amber-400" aria-label="مرحله کامل نشد" />
       ) : (
         <CheckOutlined className="text-[11px] text-emerald-500" />
       ),
@@ -145,7 +150,7 @@ export default function AiActivityStatus({ agentId = 'text_chat', activities = [
   const chainItems = buildThoughtChainItems(items, streaming);
 
   // After streaming completes, keep a compact AntD X v2-inspired collapsible Think block
-  if (!streaming && completedCount > 0) {
+  if (!streaming) {
     return (
       <div className="ai-chat-theme ai-think-box mb-2" dir="rtl">
         <button
@@ -155,11 +160,13 @@ export default function AiActivityStatus({ agentId = 'text_chat', activities = [
           className="ai-think-trigger inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11.5px] font-medium text-slate-600 transition hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-white/5"
         >
           <BulbOutlined className="text-[12px] text-[rgb(var(--brand-600-rgb))] dark:text-[rgb(var(--brand-300-rgb))]" />
-          <span>{completedCount.toLocaleString('fa-IR')} مرحله بررسی و انجام شد</span>
+          <span>{completedCount === items.length
+            ? `${completedCount.toLocaleString('fa-IR')} مرحله بررسی و انجام شد`
+            : `سوابق پردازش (${items.length.toLocaleString('fa-IR')} مرحله)`}</span>
           {expanded ? <UpOutlined className="text-[9px]" /> : <DownOutlined className="text-[9px]" />}
         </button>
         {expanded && (
-          <div className="ai-think-body mt-1.5 rounded-xl border border-[var(--ai-chat-line)] bg-[var(--ai-chat-surface)] p-2.5">
+          <div className="ai-think-body mt-1.5 rounded-xl border border-[var(--ai-chat-line)] bg-[var(--ai-chat-surface)]">
             <ThoughtChain size="small" items={chainItems} />
           </div>
         )}
@@ -169,7 +176,7 @@ export default function AiActivityStatus({ agentId = 'text_chat', activities = [
 
   return (
     <div
-      className="ai-chat-theme ai-activity-status ai-think-streaming rounded-xl border border-[var(--ai-chat-line)] bg-[var(--ai-chat-surface)] px-3 py-2.5"
+      className="ai-chat-theme ai-activity-status ai-think-streaming rounded-xl border border-[var(--ai-chat-line)] bg-[var(--ai-chat-surface)]"
       role="status"
       aria-live="polite"
       aria-atomic="true"

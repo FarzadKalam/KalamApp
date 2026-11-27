@@ -3,7 +3,7 @@ import { hasBotPlanAccess } from '../_shared/bot-plan-access.ts';
 
 import { normalizeAgentPlan, shouldEscalateCustomerAutoReply } from '../_shared/ai-agent-contract.ts';
 import { buildAvalaiPromptCacheKey, fetchAvalaiChatWithCacheKey, isModelReasoning } from '../_shared/ai-gateway.ts';
-import { resolveCentralAiApiKey } from '../_shared/ai-provider-keys.ts';
+import { resolveAiModelConnection, prepareAlternateChatRequest } from '../_shared/ai-provider-runtime.ts';
 
 type BotChannel = 'telegram' | 'bale' | 'rubika';
 
@@ -22,8 +22,6 @@ const corsHeaders = {
 };
 
 const BOT_WEBHOOK_BUILD = 'bot-webhook-2026-11-18-stable-prompt-routing';
-const DEFAULT_AI_BASE_URL = 'https://api.avalai.ir/v1';
-const DEFAULT_AI_FALLBACK_BASE_URL = 'https://api.avalapis.ir/v1';
 
 const DEFAULT_API_BASE_URL: Record<BotChannel, string> = {
   telegram: 'https://botapi.kalamnews.site/83cdbfe5940e24aaf81689a85390df5c',
@@ -2538,38 +2536,6 @@ const callAiAssistantInternal = async (
   }
 };
 
-const normalizeAiBaseUrl = (value: any) => {
-  const raw = String(value || DEFAULT_AI_BASE_URL).trim().replace(/\/+$/, '');
-  if (!raw) return DEFAULT_AI_BASE_URL;
-  const normalized = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
-  try {
-    const url = new URL(normalized);
-    if (/(^|\.)avalai\.ir$|(^|\.)avalapis\.ir$/i.test(url.hostname) && !/\/v\d+$/i.test(url.pathname)) {
-      url.pathname = `${url.pathname.replace(/\/+$/, '')}/v1`.replace(/^([^/])/, '/$1');
-    }
-    return url.toString().replace(/\/+$/, '');
-  } catch {
-    return normalized;
-  }
-};
-
-const botAiBaseUrls = () => {
-  const primary = Deno.env.get('AVALAI_BASE_URL') || Deno.env.get('AI_BASE_URL') || DEFAULT_AI_BASE_URL;
-  const fallbackRaw = Deno.env.get('AVALAI_FALLBACK_BASE_URLS')
-    || Deno.env.get('AI_FALLBACK_BASE_URLS')
-    || Deno.env.get('AVALAI_FALLBACK_BASE_URL')
-    || DEFAULT_AI_FALLBACK_BASE_URL;
-  const seen = new Set<string>();
-  return [primary, ...String(fallbackRaw).split(',')]
-    .map(normalizeAiBaseUrl)
-    .filter((item) => {
-      const key = item.toLowerCase();
-      if (!item || seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-};
-
 const isRetryableAiStatus = (status: number) =>
   status === 408 || status === 409 || status === 425 || status === 429 || status >= 500;
 
@@ -2627,7 +2593,7 @@ const isRecentBotConversation = (conversation: any[]) => {
 const loadBotAiProviderConfig = async (supabaseUrl: string, serviceRoleKey: string, orgId: string) => {
   const normalizedOrgId = String(orgId || '').trim();
   if (!normalizedOrgId) return null;
-  const [settingsRows, catalogRows, resolvedKey] = await Promise.all([
+  const [settingsRows, catalogRows] = await Promise.all([
     restSelectRows(supabaseUrl, serviceRoleKey, 'org_ai_settings', {
       org_id: `eq.${normalizedOrgId}`,
       select: 'selected_models,feature_flags',
@@ -2637,7 +2603,6 @@ const loadBotAiProviderConfig = async (supabaseUrl: string, serviceRoleKey: stri
       select: 'id,provider,capability_tags,is_active,is_coming_soon,metadata',
       limit: 500,
     }).catch(() => []),
-    resolveCentralAiApiKey({ supabaseUrl, serviceRoleKey, provider: 'avalai' }),
   ]);
   const settings = settingsRows[0] || {};
   const flags = settings?.feature_flags && typeof settings.feature_flags === 'object' ? settings.feature_flags : {};
@@ -2654,12 +2619,13 @@ const loadBotAiProviderConfig = async (supabaseUrl: string, serviceRoleKey: stri
   if (allowed.length === 0) return null;
   const allowedById = new Map(allowed.map((model: any) => [String(model?.id || '').trim(), model]));
   const resolved = allowedById.get(requested) || allowed[0];
+  const model = String(resolved.id).trim();
+  const connection = await resolveAiModelConnection(model, supabaseUrl, serviceRoleKey);
   return {
-    provider: String(resolved?.provider || 'avalai').trim() || 'avalai',
-    model: String(resolved?.id || '').trim(),
+    ...connection,
+    model,
     modelCatalog: resolved,
     orgId: normalizedOrgId,
-    apiKey: String(resolvedKey?.apiKey || '').trim(),
   };
 };
 
@@ -2697,15 +2663,15 @@ const callBotAutoReplyAi = async (providerConfig: any, payload: Record<string, a
     requestBody.temperature = 0.22;
     requestBody.max_tokens = 520;
   }
-  const cacheKey = await buildAvalaiPromptCacheKey({
+  const cacheKey = providerConfig.provider === 'avalai' ? await buildAvalaiPromptCacheKey({
     orgId: providerConfig.orgId, workload: 'customer_reply_suggestion', modelId: model,
     modelCatalog: providerConfig.modelCatalog, stableSystemPrefix: requestBody.messages[0].content,
-  });
+  }) : undefined;
   let response: Response | null = null;
   let raw = '';
   // Keep bot auto-replies within the worker budget. Retrying another base URL
   // after a provider timeout can exceed the supervisor limit and lose the reply.
-  const baseUrls = botAiBaseUrls().slice(0, 1);
+  const baseUrls = [providerConfig.baseUrl];
   for (const baseUrl of baseUrls) {
     try {
       const nextResponse = await fetchAvalaiChatWithCacheKey(`${baseUrl}/chat/completions`, {
@@ -2715,7 +2681,8 @@ const callBotAutoReplyAi = async (providerConfig: any, payload: Record<string, a
           Authorization: `Bearer ${providerConfig.apiKey}`,
         },
         signal: AbortSignal.timeout(45000),
-      }, requestBody, cacheKey);
+        redirect: providerConfig.provider === 'avalai' ? 'follow' : 'error',
+      }, prepareAlternateChatRequest(model, requestBody), cacheKey);
       response = nextResponse;
       raw = await nextResponse.text();
       if (nextResponse.ok || !isRetryableAiStatus(nextResponse.status) || baseUrl === baseUrls[baseUrls.length - 1]) break;

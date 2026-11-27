@@ -142,7 +142,7 @@ export const resolveCentralAiApiKey = async ({
   const normalizedProvider = String(provider || 'avalai').trim().toLowerCase() || 'avalai';
   const baseUrl = String(supabaseUrl || '').trim().replace(/\/+$/, '');
   const roleKey = String(serviceRoleKey || '').trim();
-  const fallback = String(envFallbackKey ?? getCentralEnvApiKey()).trim();
+  const fallback = String(envFallbackKey ?? (normalizedProvider === 'avalai' ? getCentralEnvApiKey() : '')).trim();
   const cacheKey = `${baseUrl || 'env'}::${normalizedProvider}`;
   const cached = KEY_CACHE.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) {

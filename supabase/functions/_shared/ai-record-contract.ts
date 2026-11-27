@@ -84,7 +84,7 @@ export const getAiRecordFieldState = (field: any, schema: any, record: any) => {
   return resolveConditionalFieldState(fields.find((item: any) => item.key === field.key) || field, values, schema.conditionalDisplay, fields);
 };
 
-export const getAiRecordRequiredQuestions = (records: any[], schema: any, isUpdate: boolean) => {
+export const getAiRecordRequiredFieldQuestions = (records: any[], schema: any, isUpdate: boolean) => {
   return (schema.fields || []).filter((field: any) => records.some((record) => {
       const state = getAiRecordFieldState(field, schema, record);
       if (!state.visible || !state.required) return false;
@@ -94,8 +94,11 @@ export const getAiRecordRequiredQuestions = (records: any[], schema: any, isUpda
       if (!isUpdate && value === undefined && field.defaultValue !== undefined && field.defaultValue !== null && field.defaultValue !== '') return false;
       return value === undefined || value === null || value === '' || (Array.isArray(value) && value.length === 0);
     }))
-    .map((field: any) => `لطفاً «${field.label}» را مشخص کنید.`);
+    .map((field: any) => ({ fieldKey: field.key, title: `لطفاً «${field.label}» را مشخص کنید.` }));
 };
+
+export const getAiRecordRequiredQuestions = (records: any[], schema: any, isUpdate: boolean) =>
+  getAiRecordRequiredFieldQuestions(records, schema, isUpdate).map((question: { title: string }) => question.title);
 
 /** Primary-model mode must never demote an operational request to plain chat. */
 export const hasAiStructuredAction = (capabilities: string[]) => capabilities.some((capability) =>

@@ -1,4 +1,4 @@
-export const PROCESS_OPERATION_TYPES = ['create_content_project','materialize_template_to_tasks','create_raw_process_with_tasks','add_stage_task','update_stage_task','cancel_stage_task'] as const;
+export const PROCESS_OPERATION_TYPES = ['schedule_calendar_content','create_calendar_template','create_content_project','materialize_template_to_tasks','create_raw_process_with_tasks','add_stage_task','update_stage_task','cancel_stage_task'] as const;
 
 /** All entry points and confirmation use the same operation-level policy. */
 export const assertProcessOperationPermissions = (operation: any, page: any, policy: {
@@ -14,6 +14,15 @@ export const assertProcessOperationPermissions = (operation: any, page: any, pol
     if (!policy.can(module, action, field)) throw new Error('مجوز یا امکان اشتراک برای این تغییر فرآیندی وجود ندارد.');
   };
   require(moduleId, 'view');
+  if (type === 'schedule_calendar_content' || type === 'create_calendar_template') {
+    if (moduleId !== 'content_calendars') throw new Error('این اقدام فقط در تقویم محتوایی قابل اجراست.');
+    if (type === 'create_calendar_template') require('process_templates', 'create');
+    else {
+      require(moduleId, 'edit', 'execution_process_draft');
+      if (operation.template_id) require('process_templates', 'view');
+    }
+    return;
+  }
   require('process_runs', 'view');
   const updating = ['update_stage_task','cancel_stage_task'].includes(type);
   require('tasks', updating ? 'edit' : 'create');
@@ -39,6 +48,8 @@ export const processOperationReceipt = (operations: any[]) => {
     if (id && !list.some(row => row.id === id && row.module_id === module_id)) list.push({ module_id, id, title });
   };
   for (const operation of operations) {
+    add(created,'process_templates',operation.created_template_id,operation.title || 'الگوی فرآیند');
+    add(updated,'content_calendars',operation.calendar_id,operation.calendar_title || 'تقویم محتوایی');
     add(created,'projects',operation.project_id,operation.title || 'پروژه');
     if (['materialize_template_to_tasks','create_raw_process_with_tasks'].includes(operation.type)) add(created,'process_runs',operation.process_run_id,operation.title || 'اجرای فرآیند');
     for (const task of operation.created_tasks || []) add(created,'tasks',task.id,task.title || 'فعالیت');

@@ -89,13 +89,16 @@ const truncateForPrompt = (text: string) => {
   };
 };
 
-export const buildAiUploadedFilePrompt = async (file: File): Promise<AiUploadedFilePrompt> => {
+export const buildAiUploadedFilePrompt = async (file: File, options?: { preferNativeInput?: boolean }): Promise<AiUploadedFilePrompt> => {
   const ext = getFileExtension(file.name);
   let content = '';
   let data: string | null = null;
   let inputKind: AiUploadedFilePrompt['inputKind'] = 'text';
 
-  if (SPREADSHEET_EXTENSIONS.has(ext)) {
+  if (options?.preferNativeInput) {
+    data = await fileToDataUrl(file);
+    inputKind = isImageFile(file) ? 'image' : 'file';
+  } else if (SPREADSHEET_EXTENSIONS.has(ext)) {
     content = await readSpreadsheet(file);
   } else if (isTextLikeFile(file)) {
     content = await file.text();
@@ -161,6 +164,7 @@ export const buildAiUploadedFilePromptFromUrl = async (input: {
   entryId?: string | null;
   moduleId?: string | null;
   recordId?: string | null;
+  preferNativeInput?: boolean;
 }): Promise<AiUploadedFilePrompt> => {
   const url = String(input.url || '').trim();
   if (!url) throw new Error('آدرس فایل انتخاب‌شده معتبر نیست.');
@@ -172,7 +176,7 @@ export const buildAiUploadedFilePromptFromUrl = async (input: {
   const file = new File([blob], fileName, {
     type: input.mimeType || blob.type || 'application/octet-stream',
   });
-  const prepared = await buildAiUploadedFilePrompt(file);
+  const prepared = await buildAiUploadedFilePrompt(file, { preferNativeInput: input.preferNativeInput });
   return {
     ...prepared,
     url,

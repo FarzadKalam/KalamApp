@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { dialPhone } from '../_shared/phone-number.ts';
-import { resolveCentralAiApiKey } from '../_shared/ai-provider-keys.ts';
+import { resolveAiModelConnection, prepareAlternateChatRequest } from '../_shared/ai-provider-runtime.ts';
 import { isSaasWorkflowSource, readSaasWorkflowSource, saasWorkflowRelationField } from '../_shared/saas-workflow-source.ts';
 import { summarizeAgentTaskDeliveries } from '../_shared/ai-agent-task-contract.ts';
 import { enqueueDueAgentTasks } from '../_shared/ai-agent-task-queue.ts';
@@ -76,8 +76,6 @@ const WORKFLOW_RECORD_LINK_FIELD_KEY = '__workflow_record_link';
 const WORKFLOW_RELATED_FIELD_PREFIX = '__workflow_related__';
 const WORKFLOW_MULTI_RELATION_PREFIX = '__workflow_multi_relation__';
 const PROCESS_NEXT_STAGE_FIELD_PREFIX = '__process_next_stage__';
-const DEFAULT_AI_BASE_URL = 'https://api.avalai.ir/v1';
-const DEFAULT_AI_FALLBACK_BASE_URL = 'https://api.avalapis.ir/v1';
 const UUID_LIKE_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const WORKFLOW_BOT_CHANNEL_PRIORITY = ['rubika', 'telegram', 'bale'] as const;
 
@@ -2931,38 +2929,6 @@ async function assertWorkflowAiEnabled(url: string, key: string, orgId: string):
   }
 }
 
-function normalizeAiBaseUrl(value: string): string {
-  const raw = String(value || DEFAULT_AI_BASE_URL).trim().replace(/\/+$/, '');
-  if (!raw) return DEFAULT_AI_BASE_URL;
-  const normalized = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
-  try {
-    const url = new URL(normalized);
-    if (/(^|\.)avalai\.ir$|(^|\.)avalapis\.ir$/i.test(url.hostname) && !/\/v\d+$/i.test(url.pathname)) {
-      url.pathname = `${url.pathname.replace(/\/+$/, '')}/v1`.replace(/^([^/])/, '/$1');
-    }
-    return url.toString().replace(/\/+$/, '');
-  } catch {
-    return normalized;
-  }
-}
-
-function workflowAiBaseUrls(): string[] {
-  const primary = Deno.env.get('AVALAI_BASE_URL') || Deno.env.get('AI_BASE_URL') || DEFAULT_AI_BASE_URL;
-  const fallbackRaw = Deno.env.get('AVALAI_FALLBACK_BASE_URLS')
-    || Deno.env.get('AI_FALLBACK_BASE_URLS')
-    || Deno.env.get('AVALAI_FALLBACK_BASE_URL')
-    || DEFAULT_AI_FALLBACK_BASE_URL;
-  const seen = new Set<string>();
-  return [primary, ...String(fallbackRaw).split(',')]
-    .map((item) => normalizeAiBaseUrl(item))
-    .filter((item) => {
-      const key = item.toLowerCase();
-      if (!item || seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-}
-
 function isRetryableAiStatus(status: number): boolean {
   return status === 408 || status === 409 || status === 425 || status === 429 || status >= 500;
 }
@@ -3362,16 +3328,13 @@ async function executeWorkflowProcessOperation(url: string, key: string, orgId: 
 }
 
 async function callWorkflowAiPrompt(url: string, key: string, orgId: string, prompt: string, options: Record<string, any> = {}): Promise<Record<string, any>> {
-  const { apiKey } = await resolveCentralAiApiKey({
-    supabaseUrl: url,
-    serviceRoleKey: key,
-    provider: 'avalai',
-  });
-  if (!apiKey) throw new Error('کلید مرکزی AI برای اجرای گردش‌کار خودکار تنظیم نشده است.');
   await assertWorkflowAiEnabled(url, key, orgId);
   const agentKey = String(options?.agentKey || '').trim().toLowerCase() || null;
   const agentDef = agentKey ? getAgentDefinition(agentKey) : null;
   const { model, catalogRow } = await loadWorkflowAiModel(url, key, orgId, agentKey);
+  const connection = await resolveAiModelConnection(model, url, key);
+  const { apiKey } = connection;
+  if (!apiKey) throw new Error('کلید سرویس مدل گردش‌کار تنظیم نشده است.');
   const isReasoningModel = isModelReasoning(model, catalogRow);
   const schema = options?.recordCreationSchema && typeof options.recordCreationSchema === 'object'
     ? options.recordCreationSchema
@@ -3420,15 +3383,15 @@ async function callWorkflowAiPrompt(url: string, key: string, orgId: string, pro
     requestBody.temperature = 0.2;
     requestBody.max_tokens = 2000;
   }
-  const cacheKey = await buildAvalaiPromptCacheKey({
+  const cacheKey = connection.provider === 'avalai' ? await buildAvalaiPromptCacheKey({
     orgId, workload: 'workflow_ai_prompt', modelId: model, modelCatalog: catalogRow,
     stableSystemPrefix: requestBody.messages[0].content,
-  });
+  }) : undefined;
   let response: Response | null = null;
   let usedBaseUrl = '';
   // Do not chain fallback requests for long-running AI actions. On self-hosted
   // Supabase this can exceed the supervisor timeout and cancel the worker.
-  const baseUrls = workflowAiBaseUrls().slice(0, 1);
+  const baseUrls = [connection.baseUrl];
   for (const baseUrl of baseUrls) {
     try {
       const nextResponse = await fetchAvalaiChatWithCacheKey(`${baseUrl}/chat/completions`, {
@@ -3438,7 +3401,8 @@ async function callWorkflowAiPrompt(url: string, key: string, orgId: string, pro
           Authorization: `Bearer ${apiKey}`,
         },
         signal: AbortSignal.timeout(45000),
-      }, requestBody, cacheKey);
+        redirect: connection.provider === 'avalai' ? 'follow' : 'error',
+      }, prepareAlternateChatRequest(model, requestBody), cacheKey);
       response = nextResponse;
       usedBaseUrl = baseUrl;
       if (nextResponse.ok || !isRetryableAiStatus(nextResponse.status) || baseUrl === baseUrls[baseUrls.length - 1]) break;
@@ -3458,7 +3422,7 @@ async function callWorkflowAiPrompt(url: string, key: string, orgId: string, pro
     throw new Error(String(parsed?.error?.message || parsed?.message || raw || `AI request failed: ${response.status}`));
   }
   return {
-    provider: 'avalai',
+    provider: connection.provider,
     model,
     requestId: response.headers.get('x-request-id') || response.headers.get('x-avalai-request-id') || null,
     baseUrl: usedBaseUrl,

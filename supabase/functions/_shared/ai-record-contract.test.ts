@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { canAddAiDynamicOption, getAiRecordRequiredQuestions, hasAiStructuredAction, hydrateAiRecordOptions, prepareAiRecordOptions, resolveAiRecordSchema } from './ai-record-contract';
 import { heuristicSelectAgentsAndCapabilities } from './ai-agent-kernel';
-import { buildAiQuestionAnswer, normalizeAiQuestions, presentAiQuestionResponse } from './ai-questions';
+import { bindAiRecordQuestions, buildAiQuestionAnswer, normalizeAiQuestions, presentAiQuestionResponse } from './ai-questions';
 
 const base = { moduleId: 'marketing_leads', fields: [
   { key: 'name', label: 'عنوان لید', type: 'text', required: true },
@@ -77,6 +77,18 @@ describe('shared operational intake', () => {
 });
 
 describe('interactive questions', () => {
+  it('binds only allowed field questions, merges repeated fields, and preserves open questions', () => {
+    const questions = bindAiRecordQuestions([
+      { title: 'فاکتور برای چه روزی است؟', fieldKey: 'invoice_date' },
+      'لطفاً «تاریخ فاکتور» را مشخص کنید.',
+      { title: 'ادامه بدهم؟', fieldKey: 'org_id' },
+    ], [{ key: 'invoice_date', label: 'تاریخ فاکتور' }]);
+    expect(questions).toEqual([
+      { id: 'question_1', title: 'فاکتور برای چه روزی است؟', fieldKey: 'invoice_date', options: [] },
+      { id: 'question_2', title: 'ادامه بدهم؟', options: [] },
+    ]);
+    expect(normalizeAiQuestions(questions)).toEqual(questions);
+  });
   it('preserves options, supports plain questions and hides internal record identities', () => {
     const questions = normalizeAiQuestions([{ title: 'مسئول پیگیری؟', options: ['خودم', 'مدیر فروش'] }, 'کدام درخواست؟', { title: 'کدام درخواست؟' }]);
     expect(questions).toHaveLength(2);

@@ -5,7 +5,7 @@ import { MODULES } from '../../moduleRegistry';
 import type { ModuleField } from '../../types';
 import { getFieldLabelFa } from '../../utils/fieldLabel';
 import SmartFieldRenderer from '../SmartFieldRenderer';
-import AdaptiveIdentityPicker from '../AdaptiveIdentityPicker';
+import { resolveAiRecordEditorField, type AiRecordFieldSpec } from '../../utils/aiRecordCreation';
 import EditableTable from '../EditableTable';
 import { getAiRecordFieldState } from '../../supabase/functions/_shared/ai-record-contract';
 
@@ -50,25 +50,10 @@ const AiRecordMutationApprovalCard: React.FC<Props> = ({
       .filter((table: any) => table.key && table.columns.length > 0)
   ), [schema]);
 
-  const editableFields = useMemo<ModuleField[]>(() => {
-    const schemaKeys = new Set(
-      (Array.isArray(schema?.fields) ? schema.fields : [])
-        .map((item: any) => String(item?.key || '').trim())
-        .filter(Boolean),
-    );
-    return (Array.isArray(schema?.fields) ? schema.fields : [])
-      .map((spec: any) => ({ ...(moduleConfig?.fields || []).find((field: ModuleField) => field.key === spec.key),
-        ...spec, labels: { fa: spec.label || (moduleConfig?.fields || []).find((field: ModuleField) => field.key === spec.key)?.labels?.fa || spec.key },
-      } as ModuleField))
-      .filter((field: ModuleField) => schemaKeys.has(String(field.key)))
-      .map((field: ModuleField) => ({
-        ...field,
-        labels: {
-          ...(field.labels || {}),
-          fa: getFieldLabelFa(field, { moduleId }),
-        },
-      }));
-  }, [moduleConfig, moduleId, schema]);
+  const editableFields = useMemo<ModuleField[]>(() => (
+    (Array.isArray(schema?.fields) ? schema.fields : []).filter((spec: AiRecordFieldSpec) => spec?.key)
+      .map((spec: AiRecordFieldSpec) => resolveAiRecordEditorField(moduleId, spec))
+  ), [moduleId, schema]);
 
   const updateField = (recordIndex: number, fieldKey: string, value: any) => {
     if (disabled) return;
@@ -158,21 +143,18 @@ const AiRecordMutationApprovalCard: React.FC<Props> = ({
                 {visibleFields.map((field) => (
                   <div key={field.key} className="min-w-0 [&_.ant-form-item]:mb-2 [&_.ant-form-item-label]:pb-0.5">
                     <div className="mb-1 text-xs font-semibold text-slate-700 dark:text-slate-200">{getFieldLabelFa(field,{moduleId})}</div>
-                    {field.type === 'user' || field.key === 'assignee_id' ? <AdaptiveIdentityPicker scopes={['user']} valueMode="raw"
-                      value={record.fields?.[field.key] ?? record.original?.[field.key]} disabled={disabled}
-                      aria-label={getFieldLabelFa(field,{moduleId})} pickerTitle={getFieldLabelFa(field,{moduleId})}
-                      onChange={value => updateField(recordIndex,String(field.key),value || null)} className="w-full" /> : <SmartFieldRenderer
+                    <SmartFieldRenderer
                       field={disabled ? { ...field, readonly: true } : field}
                       value={Object.prototype.hasOwnProperty.call(record.fields || {}, field.key) ? record.fields[field.key] : record.original?.[field.key]}
                       onChange={(value) => updateField(recordIndex, String(field.key), value)}
-                      forceEditMode
+                      forceEditMode={!disabled}
                       compactMode
                       disableRequired
                       moduleId={moduleId}
                       allValues={{ ...(record.original || {}), ...(record.fields || {}) }}
                       recordId={actionType === 'update_record_from_prompt' ? record.record_id || undefined : undefined}
                       overlayZIndexBase={32000}
-                    />}
+                    />
                   </div>
                 ))}
               </div>

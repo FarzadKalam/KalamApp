@@ -1,3 +1,4 @@
+import { AI_PROVIDERS, ALTERNATE_AI_CAPABILITIES, getAiModelRoute, toAiCatalogModelId, type AiProviderId } from '../../supabase/functions/_shared/ai-provider-catalog';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import AiReasoningSelect from '../../components/ai/AiReasoningSelect';
 import { REASONING_LEVEL_LABELS } from '../../supabase/functions/_shared/ai-reasoning';
@@ -45,6 +46,7 @@ import AiSparkleIcon from '../../components/ai/AiSparkleIcon';
 import AiUsageHistoryTable from '../../components/ai/AiUsageHistoryTable';
 
 const { Text } = Typography;
+const PROVIDER_OPTIONS = (Object.keys(AI_PROVIDERS) as AiProviderId[]).map(value => ({ value, label: AI_PROVIDERS[value].label }));
 
 const ALL_CAPABILITIES = [
   { key: 'dashboard_chat', label: getAiAgentLabel('dashboard_chat') },
@@ -132,6 +134,8 @@ type ModelFormValues = AiModel;
 
 type ProviderModel = {
   id: string;
+  upstream_id?: string;
+  max_output_tokens?: number | null;
   label: string;
   suggested_capability_tags?: string[];
   provider_capability_hints?: string[];
@@ -173,6 +177,13 @@ const SaasAdminAiSettings: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [overview, setOverview] = useState<Record<string, any> | null>(null);
   const [syncing, setSyncing] = useState(false);
+  const [provider, setProvider] = useState<AiProviderId>('avalai');
+  const providerLabel = AI_PROVIDERS[provider].label;
+  const [keyRefresh, setKeyRefresh] = useState(0);
+  const [providerStatus, setProviderStatus] = useState<{ provider: AiProviderId; keys: ProviderKeyRecord[]; source: string; ready: boolean }>();
+  const [keysLoading, setKeysLoading] = useState(true);
+  const [testModel, setTestModel] = useState('');
+  const [editProvider, setEditProvider] = useState<AiProviderId>('avalai');
   const [providerModelsOpen, setProviderModelsOpen] = useState(false);
   const [providerModels, setProviderModels] = useState<ProviderModel[]>([]);
   const [providerModelsWarning, setProviderModelsWarning] = useState('');
@@ -194,7 +205,7 @@ const SaasAdminAiSettings: React.FC = () => {
   const [keyModalOpen, setKeyModalOpen] = useState(false);
   const [newApiKey, setNewApiKey] = useState('');
   const [newKeyLabel, setNewKeyLabel] = useState('');
-  const [newKeyActivate, setNewKeyActivate] = useState(true);
+  const [newKeyActivate, setNewKeyActivate] = useState(false);
   const [keySaving, setKeySaving] = useState(false);
   const [keyActionId, setKeyActionId] = useState<string | null>(null);
   const [form] = Form.useForm<ModelFormValues>();
@@ -297,8 +308,26 @@ const SaasAdminAiSettings: React.FC = () => {
   const liveExchangeRateIrt = Number(liveExchangeRate?.rate || 0) > 0 ? Number(liveExchangeRate.rate) : null;
   const liveExchangeRateSource = String(liveExchangeRate?.source || '').trim();
   const providerCredit = overview?.providerCredit || {};
-  const providerKeys = useMemo<ProviderKeyRecord[]>(() => (overview?.providerKeys || []) as ProviderKeyRecord[], [overview]);
-  const activeProviderKeyMeta = overview?.activeProviderKeyMeta || {};
+  useEffect(() => {
+    let current = true;
+    setKeysLoading(true);
+    void callAi({ action: 'saas_ai', sub: 'provider_keys', provider })
+      .then(data => {
+        if (current) setProviderStatus({ provider, keys: data.providerKeys || [], source: data.source, ready: data.connectionReady });
+      })
+      .catch(error => {
+        if (!current) return;
+        setProviderStatus(undefined);
+        message.error(toFaErrorMessage(error, 'دریافت کلیدهای ارائه‌دهنده ناموفق بود.'));
+      })
+      .finally(() => { if (current) setKeysLoading(false); });
+    return () => { current = false; };
+  }, [provider, keyRefresh, message]);
+
+  const currentProviderStatus = providerStatus?.provider === provider ? providerStatus : undefined;
+  const providerKeys = currentProviderStatus?.keys || [];
+  const activeKeySource = currentProviderStatus?.source;
+  const refreshProviderKeys = () => setKeyRefresh(count => count + 1);
 
   const handleAddProviderKey = async () => {
     const cleanKey = String(newApiKey || '').trim();
@@ -311,18 +340,20 @@ const SaasAdminAiSettings: React.FC = () => {
       const data = await callAi({
         action: 'saas_ai',
         sub: 'add_provider_key',
+        provider,
         apiKey: cleanKey,
         label: String(newKeyLabel || '').trim() || null,
         activate: newKeyActivate,
       });
-      message.success(String(data?.message || 'کلید جدید با موفقیت ثبت شد.'));
+      if (data?.activationFailed) message.warning(data.message);
+      else message.success(String(data?.message || 'کلید جدید با موفقیت ثبت شد.'));
       setKeyModalOpen(false);
       setNewApiKey('');
       setNewKeyLabel('');
-      setNewKeyActivate(true);
-      await loadOverview();
+      setNewKeyActivate(false);
+      refreshProviderKeys();
     } catch (err: any) {
-      message.error(toFaErrorMessage(err, 'ثبت کلید AvalAI ناموفق بود.'));
+      message.error(toFaErrorMessage(err, 'ثبت کلید ارائه‌دهنده ناموفق بود.'));
     } finally {
       setKeySaving(false);
     }
@@ -334,7 +365,7 @@ const SaasAdminAiSettings: React.FC = () => {
   ) => {
     setKeyActionId(`${sub}:${keyId}`);
     try {
-      const data = await callAi({ action: 'saas_ai', sub, keyId });
+      const data = await callAi({ action: 'saas_ai', sub, keyId, provider, testModel: sub === 'test_provider_key' ? testModel.trim() : undefined });
       if (data?.message) {
         if (sub === 'test_provider_key' && data?.testOk === false) {
           message.warning(String(data.message));
@@ -342,7 +373,7 @@ const SaasAdminAiSettings: React.FC = () => {
           message.success(String(data.message));
         }
       }
-      await loadOverview();
+      refreshProviderKeys();
     } catch (err: any) {
       message.error(toFaErrorMessage(err, 'انجام عملیات روی کلید ناموفق بود.'));
     } finally {
@@ -369,9 +400,9 @@ const SaasAdminAiSettings: React.FC = () => {
   const handleSyncModels = async () => {
     setSyncing(true);
     try {
-      const data = await callAi({ action: 'saas_ai', sub: 'sync_models' });
+      const data = await callAi({ action: 'saas_ai', sub: 'sync_models', provider });
       const list: any[] = data?.models || [];
-      message.success(`${list.length} مدل از AvalAI دریافت شد.`);
+      message.success(`${list.length} مدل از ${providerLabel} دریافت شد.`);
       setProviderModels(list as ProviderModel[]);
       setProviderModelsWarning(String(data?.warning || ''));
       setProviderModelTab('all');
@@ -392,23 +423,25 @@ const SaasAdminAiSettings: React.FC = () => {
       return;
     }
     setEditModel(null);
+    setEditProvider(provider);
     form.resetFields();
     form.setFieldsValue({
-      id: model.id,
-      provider: 'avalai',
+      id: model.upstream_id || model.id,
+      provider,
       display_name_fa: model.label || model.id,
       capability_tags: model.suggested_capability_tags || [],
-      input_usd_per_1m: model.input_usd_per_1m ?? 0,
-      output_usd_per_1m: model.output_usd_per_1m ?? 0,
+      input_usd_per_1m: model.input_usd_per_1m ?? (provider === 'avalai' ? 0 : undefined),
+      output_usd_per_1m: model.output_usd_per_1m ?? (provider === 'avalai' ? 0 : undefined),
       margin_percent: 30,
       exchange_rate_irt: 0,
-      is_active: true,
+      is_active: provider === 'avalai',
       is_coming_soon: false,
       metadata: {
         context_window: model.context_window ?? null,
-        provider_catalog_id: model.id,
+        max_output_tokens: model.max_output_tokens ?? null,
+        provider_catalog_id: model.upstream_id || model.id,
         provider_capability_hints: Array.isArray(model.provider_capability_hints) ? model.provider_capability_hints : [],
-        override_exchange_rate: false,
+        override_exchange_rate: provider !== 'avalai',
       },
     });
     setProviderModelsOpen(false);
@@ -417,6 +450,8 @@ const SaasAdminAiSettings: React.FC = () => {
 
   const openEdit = (model: AiModel | null) => {
     setEditModel(model);
+    setEditProvider(model ? getAiModelRoute(model.id).provider : provider);
+    form.resetFields();
     if (model) {
       const hasManualRate = model.metadata?.override_exchange_rate === true && Number(model.exchange_rate_irt || 0) > 0;
       form.setFieldsValue({
@@ -430,15 +465,14 @@ const SaasAdminAiSettings: React.FC = () => {
         },
       });
     } else {
-      form.resetFields();
       form.setFieldsValue({
-        provider: 'avalai',
+        provider,
         margin_percent: 30,
         exchange_rate_irt: 0,
-        is_active: true,
+        is_active: provider === 'avalai',
         is_coming_soon: false,
         capability_tags: [],
-        metadata: { default_capability_tags: [], override_exchange_rate: false },
+        metadata: { default_capability_tags: [], override_exchange_rate: provider !== 'avalai' },
       });
     }
     setEditOpen(true);
@@ -449,14 +483,20 @@ const SaasAdminAiSettings: React.FC = () => {
       const values = await form.validateFields();
       const allValues = form.getFieldsValue(true);
       const merged = { ...(editModel || {}), ...allValues, ...values };
-      const manualOverride = merged?.metadata?.override_exchange_rate === true && Number(merged?.exchange_rate_irt || 0) > 0;
+      const manualOverride = (editProvider !== 'avalai' || merged?.metadata?.override_exchange_rate === true) && Number(merged?.exchange_rate_irt || 0) > 0;
+      if (editProvider !== 'avalai' && (Number(merged.input_usd_per_1m) > 0 || Number(merged.output_usd_per_1m) > 0) && !manualOverride) {
+        form.setFields([{ name: 'exchange_rate_irt', errors: ['نرخ تبدیل دلار را وارد کنید.'] }]);
+        return;
+      }
       setEditSaving(true);
       await callAi({
         action: 'saas_ai',
         sub: 'upsert_model',
         model: {
           ...merged,
+          id: editModel?.id || toAiCatalogModelId(editProvider, values.id.trim()),
           exchange_rate_irt: manualOverride ? Number(merged.exchange_rate_irt) : 0,
+          metadata: { ...merged.metadata, override_exchange_rate: manualOverride },
         },
       });
       message.success(editModel ? 'مدل ویرایش شد.' : 'مدل جدید اضافه شد.');
@@ -622,7 +662,7 @@ const SaasAdminAiSettings: React.FC = () => {
       dataIndex: 'label',
       width: 180,
       render: (value: string | null) => (
-        <span className="text-xs font-semibold">{value || 'کلید AvalAI'}</span>
+        <span className="text-xs font-semibold">{value || 'کلید API'}</span>
       ),
     },
     {
@@ -797,24 +837,27 @@ const SaasAdminAiSettings: React.FC = () => {
           </p>
         </div>
         <Space wrap>
+          <Select aria-label="ارائه‌دهنده هوش مصنوعی" value={provider} options={PROVIDER_OPTIONS}
+            disabled={syncing || keyActionId !== null} popupMatchSelectWidth={false}
+            onChange={value => { setProvider(value); setTestModel(''); }} />
           <Button
             icon={<KeyOutlined />}
             onClick={() => setKeyModalOpen(true)}
           >
-            ثبت کلید AvalAI
+            ثبت کلید API
           </Button>
           <Button
             icon={<CloudSyncOutlined />}
             loading={syncing}
             onClick={handleSyncModels}
           >
-            دریافت مدل‌های AvalAI
+            دریافت مدل‌های ارائه‌دهنده
           </Button>
           <Button icon={<PlusOutlined />} onClick={() => openEdit(null)}>
             مدل جدید
           </Button>
-          <Button icon={<ReloadOutlined />} loading={loading} onClick={loadOverview}>
-            بروزرسانی
+          <Button icon={<ReloadOutlined />} loading={loading} onClick={() => { void loadOverview(); refreshProviderKeys(); }}>
+            به‌روزرسانی
           </Button>
         </Space>
       </div>
@@ -884,30 +927,34 @@ const SaasAdminAiSettings: React.FC = () => {
             key: 'provider_keys',
             label: (
               <span className="inline-flex items-center gap-2">
-                <KeyOutlined /> کلیدهای API سرویس AvalAI ({providerKeys.length.toLocaleString('fa-IR')})
+                <KeyOutlined /> کلیدهای API {providerLabel} ({providerKeys.length.toLocaleString('fa-IR')})
               </span>
             ),
             children: (
               <div className="space-y-3">
-                <Alert
-                  type={activeProviderKeyMeta?.source === 'db' ? 'success' : activeProviderKeyMeta?.source === 'env' ? 'info' : 'warning'}
-                  showIcon
-                  className="text-xs"
-                  message={
-                    activeProviderKeyMeta?.source === 'db'
-                      ? 'کلید فعال AvalAI از فهرست کلیدهای ثبت‌شده در این پنل استفاده می‌شود.'
-                      : activeProviderKeyMeta?.source === 'env'
-                        ? `در حال حاضر کلید fallback سرور (${activeProviderKeyMeta?.envFallbackMasked || 'تنظیم‌شده'}) فعال است؛ می‌توانید کلید جدید ثبت و فعال کنید.`
-                        : 'هیچ کلید فعالی برای AvalAI ثبت نشده است.'
-                  }
-                />
+                {currentProviderStatus && (
+                  <Alert
+                    type={activeKeySource === 'db' && currentProviderStatus.ready ? 'success' : 'info'}
+                    showIcon
+                    message={!currentProviderStatus.ready
+                      ? 'برای اتصال Cloudflare، شناسهٔ حساب باید در سرور تنظیم شود.'
+                      : activeKeySource === 'db' ? 'کلید فعال از فهرست کلیدها استفاده می‌شود.'
+                      : activeKeySource === 'env' ? 'کلید تنظیم‌شده در سرور فعال است.'
+                      : 'هنوز کلید فعالی برای این ارائه‌دهنده تنظیم نشده است.'}
+                  />
+                )}
+                <label className="block max-w-md">
+                  <span className="mb-1 block text-sm">شناسهٔ مدل برای تست اتصال (اختیاری)</span>
+                  <Input dir="ltr" value={testModel} onChange={event => setTestModel(event.target.value)}
+                    placeholder={AI_PROVIDERS[provider].testModel} />
+                </label>
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <Button
                     type="primary"
                     icon={<PlusOutlined />}
                     onClick={() => setKeyModalOpen(true)}
                   >
-                    ثبت کلید AvalAI جدید
+                    ثبت کلید جدید
                   </Button>
                   <Text type="secondary" className="text-xs">
                     کلیدها به‌صورت رمزنگاری‌شده در سرور نگهداری می‌شوند و در این جدول فقط نسخهٔ ماسک‌شده و زمان ثبت آن‌ها نمایش داده می‌شود.
@@ -916,11 +963,11 @@ const SaasAdminAiSettings: React.FC = () => {
                 <Table
                   rowKey="id"
                   size="small"
-                  loading={loading}
+                  loading={keysLoading}
                   dataSource={providerKeys}
                   columns={providerKeyColumns}
                   pagination={{ pageSize: 10, showSizeChanger: false }}
-                  locale={{ emptyText: <Empty description="هنوز کلیدی برای AvalAI ثبت نشده است." /> }}
+                  locale={{ emptyText: <Empty description="هنوز کلیدی برای این ارائه‌دهنده ثبت نشده است." /> }}
                   scroll={{ x: 880 }}
                 />
               </div>
@@ -1101,7 +1148,7 @@ const SaasAdminAiSettings: React.FC = () => {
 
       <Modal
         open={providerModelsOpen}
-        title="مدل‌های AvalAI"
+        title={`مدل‌های ${providerLabel}`}
         onCancel={() => setProviderModelsOpen(false)}
         footer={<Button onClick={() => setProviderModelsOpen(false)}>بستن</Button>}
         width={1100}
@@ -1111,7 +1158,7 @@ const SaasAdminAiSettings: React.FC = () => {
           <Alert
             type="info"
             showIcon
-            message={`${providerModels.length.toLocaleString('fa-IR')} مدل از AvalAI دریافت شد؛ برای سرعت، هر بار فقط یک صفحه نمایش داده می‌شود.`}
+            message={`${providerModels.length.toLocaleString('fa-IR')} مدل از ${providerLabel} دریافت شد.`}
             description="برچسب‌ها از اطلاعات مدل و نام آن پیشنهاد می‌شوند. پیش از ذخیره می‌توانید آن‌ها و قیمت را در فرم افزودن مدل اصلاح کنید."
           />
           {providerModelsWarning ? <Alert type="warning" showIcon message={providerModelsWarning} /> : null}
@@ -1220,20 +1267,20 @@ const SaasAdminAiSettings: React.FC = () => {
             <Form.Item name="id" label="شناسه مدل (ID)" rules={[{ required: true }]}>
               <Input placeholder="شناسه دریافتی از provider" disabled={!!editModel} />
             </Form.Item>
-            <Form.Item name="provider" label="Provider">
-              <Input placeholder="نام provider" />
-            </Form.Item>
+            {editProvider === 'avalai' ? (
+              <Form.Item name="provider" label="خانوادهٔ مدل"><Input placeholder="نام خانوادهٔ مدل" /></Form.Item>
+            ) : <div className="text-sm">{AI_PROVIDERS[editProvider].label}</div>}
             <Form.Item name="display_name_fa" label="نام فارسی" className="col-span-2">
               <Input placeholder="نام نمایشی مدل" />
             </Form.Item>
             <Form.Item name="capability_tags" label="ویژگی‌ها (Capabilities)" className="col-span-2">
               <Select
                 mode="multiple"
-                options={ALL_CAPABILITIES.map((c) => ({ value: c.key, label: c.label }))}
+                options={ALL_CAPABILITIES.filter(c => editProvider === 'avalai' || (ALTERNATE_AI_CAPABILITIES as readonly string[]).includes(c.key)).map(c => ({ value: c.key, label: c.label }))}
                 placeholder="انتخاب ویژگی‌های مجاز"
               />
             </Form.Item>
-            <Form.Item name="input_usd_per_1m" label="ورودی (USD/1M توکن)">
+            <Form.Item name="input_usd_per_1m" label="ورودی (USD/1M توکن)" rules={[{ required: editProvider !== 'avalai', message: 'تعرفهٔ مدل را وارد کنید.' }]}>
               <InputNumber min={0} step={0.01} className="w-full" />
             </Form.Item>
             <Form.Item name={['metadata','reasoning_config','levels']} label="سطح‌های تفکر تأییدشده" className="col-span-2"
@@ -1249,7 +1296,7 @@ const SaasAdminAiSettings: React.FC = () => {
             <Form.Item name={['metadata','reasoning_config','route']} label="مسیر اجرای تفکر">
               <Select allowClear options={[{ value: 'responses',label: 'Responses' },{ value: 'messages',label: 'Messages' }]} placeholder="مسیر شناخته‌شده مدل" />
             </Form.Item>
-            <Form.Item name="output_usd_per_1m" label="خروجی (USD/1M توکن)">
+            <Form.Item name="output_usd_per_1m" label="خروجی (USD/1M توکن)" rules={[{ required: editProvider !== 'avalai', message: 'تعرفهٔ مدل را وارد کنید.' }]}>
               <InputNumber min={0} step={0.01} className="w-full" />
             </Form.Item>
             <Form.Item name="specific_cost_usd" label="هزینه مستقیم (USD)">
@@ -1265,9 +1312,10 @@ const SaasAdminAiSettings: React.FC = () => {
               name={['metadata', 'override_exchange_rate']}
               label="تعیین نرخ تبدیل دستی"
               valuePropName="checked"
-              tooltip="در حالت خودکار، نرخ تبدیل دلار دقیقاً از پاسخ لحظه‌ای AvalAI خوانده می‌شود."
+              tooltip={editProvider === 'avalai' ? 'در حالت خودکار، نرخ از AvalAI خوانده می‌شود.' : 'برای مدل تعرفه‌دار نرخ تبدیل دلار را وارد کنید.'}
             >
               <Switch
+                disabled={editProvider !== 'avalai'}
                 checkedChildren="دستی"
                 unCheckedChildren="خودکار AvalAI"
                 onChange={(checked) => {
@@ -1287,10 +1335,10 @@ const SaasAdminAiSettings: React.FC = () => {
             >
               <InputNumber
                 min={0}
-                disabled={!overrideExchangeRate}
+                disabled={editProvider === 'avalai' && !overrideExchangeRate}
                 className="w-full"
                 placeholder={
-                  liveExchangeRateIrt
+                  editProvider !== 'avalai' ? 'تومان به‌ازای یک دلار' : liveExchangeRateIrt
                     ? `خودکار از نرخ زنده AvalAI (${Math.round(liveExchangeRateIrt).toLocaleString('fa-IR')} تومان)`
                     : 'خودکار از نرخ زنده AvalAI'
                 }
@@ -1362,7 +1410,7 @@ const SaasAdminAiSettings: React.FC = () => {
 
       <Modal
         open={keyModalOpen}
-        title="ثبت کلید API جدید AvalAI"
+        title={`ثبت کلید ${providerLabel}`}
         onCancel={() => {
           if (keySaving) return;
           setKeyModalOpen(false);
@@ -1385,16 +1433,16 @@ const SaasAdminAiSettings: React.FC = () => {
             <Input
               value={newKeyLabel}
               onChange={(event) => setNewKeyLabel(event.target.value)}
-              placeholder="مثلاً: کلید اصلی AvalAI آذر"
+              placeholder="مثلاً کلید اصلی"
               maxLength={120}
             />
           </div>
           <div>
-            <div className="mb-1 text-xs text-gray-500">کلید API سرویس AvalAI</div>
+            <div className="mb-1 text-xs text-gray-500">کلید API</div>
             <Input.Password
               value={newApiKey}
               onChange={(event) => setNewApiKey(event.target.value)}
-              placeholder="aa-..."
+              placeholder="کلید ارائه‌دهنده"
               style={{ direction: 'ltr' }}
               autoComplete="new-password"
             />
