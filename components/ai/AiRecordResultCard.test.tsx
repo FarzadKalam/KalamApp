@@ -24,10 +24,12 @@ describe('saved record receipt', () => {
       onAnimationComplete={onAnimationComplete}
     /></MemoryRouter>);
     const receipt = screen.getByLabelText('نتیجهٔ ثبت و ویرایش');
+    // React 18 listens for the prefixed event in jsdom without AnimationEvent.
+    const eventName = 'AnimationEvent' in window ? 'animationend' : 'webkitAnimationEnd';
     expect(receipt.classList.contains('ai-record-result-enter')).toBe(true);
-    fireEvent.animationEnd(screen.getByRole('link', { name: /سالن اول/ }));
+    fireEvent(screen.getByRole('link', { name: /سالن اول/ }), new Event(eventName, { bubbles: true }));
     expect(onAnimationComplete).not.toHaveBeenCalled();
-    fireEvent.animationEnd(receipt);
+    fireEvent(receipt, new Event(eventName, { bubbles: true }));
     expect(onAnimationComplete).toHaveBeenCalledTimes(1);
   });
 });
