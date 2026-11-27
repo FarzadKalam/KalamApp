@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { isPrimaryAgentOperation } from '../_shared/ai-gateway';
 import { hasAiStructuredAction } from '../_shared/ai-record-contract';
 import { NATIVE_AGENT_SKILLS } from '../_shared/ai-native-skills';
+import { createAiActivityTracker } from '../_shared/ai-agents';
 
 // Execute the actual preflight, stopping before thread/provider work. The live
 // failure occurred here after successful routing, before the mutation handler.
@@ -18,7 +19,7 @@ const harness = () => {
     return { orgAiSettings: {}, model: 'actual-agent-model' };
   });
   const assertAiCapabilityEnabled = vi.fn(async () => {});
-  const dependencies = { resolveProviderConfig, assertAiCapabilityEnabled, isPrimaryAgentOperation, hasAiStructuredAction, NATIVE_AGENT_SKILLS,
+  const dependencies = { resolveProviderConfig, assertAiCapabilityEnabled, isPrimaryAgentOperation, hasAiStructuredAction, NATIVE_AGENT_SKILLS, createAiActivityTracker,
     normalizeTaskBundleInputs: () => [], normalizeContext: (context: any) => context || {},
     AI_CAPABILITY_FEATURE_KEYS: { record_creation: 'ai_chat', process_operation: 'ai_chat', voice_input: 'ai_voice_input' },
   };
