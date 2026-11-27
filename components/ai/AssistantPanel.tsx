@@ -3109,6 +3109,10 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     } catch (error: any) {
       message.error(toFaErrorMessage(error, 'اجرای اقدام تاییدشده ناموفق بود.'));
       if (pendingAiAction?.actionType === 'process_operation_from_prompt' && error?.payload?.reviewRequired !== true) {
+        const receipt = error?.payload;
+        if (receipt?.partial === true && (receipt.created_records?.length || receipt.updated_records?.length)) {
+          setAnimatedReceiptId(actionId);
+        }
         setPendingAiAction(null);
         await loadThread();
       }
