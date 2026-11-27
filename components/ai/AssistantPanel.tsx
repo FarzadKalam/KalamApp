@@ -3356,7 +3356,12 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
                 onRetry={retryText ? () => void submitChat(retryText, 'text') : undefined}
               />
             )}
-            {!isUser ? <AiRecordResultCard metadata={item.metadata} animate={!!animatedReceiptId && item.metadata?.action_log_id === animatedReceiptId} /> : null}
+            {!isUser ? <AiRecordResultCard
+              metadata={item.metadata}
+              onAnimationComplete={animatedReceiptId && item.metadata?.action_log_id === animatedReceiptId
+                ? () => setAnimatedReceiptId((current) => current === animatedReceiptId ? null : current)
+                : undefined}
+            /> : null}
             <MessageAttachmentGallery attachments={attachments} presentation={isUser ? undefined : 'assistant'} />
             {questions.length > 0 ? (
               <AiQuestionCard questions={questions} form={clarificationForm}

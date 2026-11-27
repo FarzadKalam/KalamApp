@@ -4,13 +4,19 @@ import { MODULES } from '../../moduleRegistry';
 import { getRecordTitle } from '../../utils/recordTitle';
 
 /** Durable execution receipt for every module, in the approval surface. */
-export default function AiRecordResultCard({ metadata, animate = false }: { metadata: any; animate?: boolean }) {
+export default function AiRecordResultCard({ metadata, onAnimationComplete }: { metadata: any; onAnimationComplete?: () => void }) {
   const results = [
     ...(Array.isArray(metadata?.created_records) ? metadata.created_records.map((record: any) => ({ ...record, verb: 'ثبت شد' })) : []),
     ...(Array.isArray(metadata?.updated_records) ? metadata.updated_records.map((record: any) => ({ ...record, verb: 'ویرایش شد' })) : []),
   ].filter((record: any) => record.id && MODULES[record.module_id]);
   if (!results.length) return null;
-  return <div className={`ai-approval-section mt-2 rounded-xl border border-[var(--ai-chat-line,#dfe2e5)] bg-[var(--ai-chat-surface,#fff)] p-3 dark:border-white/10 dark:bg-white/[0.045]${animate ? ' ai-record-result-enter' : ''}`} aria-label="نتیجهٔ ثبت و ویرایش">
+  return <div
+    className={`ai-approval-section mt-2 rounded-xl border border-[var(--ai-chat-line,#dfe2e5)] bg-[var(--ai-chat-surface,#fff)] p-3 dark:border-white/10 dark:bg-white/[0.045]${onAnimationComplete ? ' ai-record-result-enter' : ''}`}
+    aria-label="نتیجهٔ ثبت و ویرایش"
+    onAnimationEnd={onAnimationComplete && ((event) => {
+      if (event.target === event.currentTarget) onAnimationComplete();
+    })}
+  >
     <div className="mb-2 flex items-center gap-2 font-semibold"><CheckCircleOutlined className="text-emerald-600 dark:text-emerald-400" />ذخیره شد</div>
     <ul className="m-0 list-none space-y-2 p-0">{results.map((record: any) => <li key={`${record.module_id}:${record.id}`}>
       <Link className="flex min-h-11 items-center justify-between gap-2 rounded-lg px-2 hover:bg-black/5 focus-visible:outline focus-visible:outline-2 dark:hover:bg-white/5" to={`/${record.module_id}/${record.id}`}>
