@@ -15,7 +15,8 @@ const tool = { type: 'function', function: { name: 'read_organization_data' } };
 const toolCall = { id: 'call-1', type: 'function', function: { name: 'read_organization_data', arguments: '{"moduleId":"marketing_leads"}' } };
 const sse = (values: any[]) => new Response(values.map(value => `data: ${JSON.stringify(value)}\n\n`).join('') + 'data: [DONE]\n\n', { headers: { 'content-type': 'text/event-stream' } });
 
-const harness = (streaming: boolean, responses: Response[], providerConfig: Record<string, any> = {}) => {
+const harness = (streaming: boolean, responses: Response[], providerConfig: Record<string, any> = {},
+  providerReply?: (signal: AbortSignal) => Promise<Response>) => {
   const sent: any[] = [];
   const deps = {
     appendContinuationText,createContinuationDeltaBuffer,
@@ -23,6 +24,7 @@ const harness = (streaming: boolean, responses: Response[], providerConfig: Reco
     executeAgentToolCalls, appendStreamToolCalls, buildAgentToolResultFallback,
     requestAiProvider: vi.fn(async (_config: any, _path: string, options: any) => {
       sent.push(JSON.parse(options.body));
+      if (providerReply) return { response: await providerReply(options.signal), baseUrl: 'test://' };
       const response = responses.shift(); if (!response) throw new Error('Unexpected provider call');
       return { response, baseUrl: 'test://' };
     }),
@@ -49,6 +51,22 @@ const harness = (streaming: boolean, responses: Response[], providerConfig: Reco
 };
 
 describe('actual central agent data tool loop', () => {
+  it.each([false, true])('cancels the provider request without starting a retry (stream: %s)', async streaming => {
+    const stop = new AbortController();
+    let providerStarted!: () => void;
+    const started = new Promise<void>(resolve => { providerStarted = resolve; });
+    const fixture = harness(streaming, [], {}, signal => new Promise((_resolve, reject) => {
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      providerStarted();
+    }));
+    const turn = fixture.run({ signal: stop.signal });
+    const result = expect(turn).rejects.toMatchObject({ name: 'AbortError' });
+    await started;
+    stop.abort();
+    await result;
+    expect(fixture.sent).toHaveLength(1);
+  });
+
   it.each([false, true])('sends only a routing key and retries a rejected hint (stream: %s)', async streaming => {
     const fallback = streaming
       ? sse([{ choices: [{ delta: { content: 'پاسخ کامل' }, finish_reason: 'stop' }] }])

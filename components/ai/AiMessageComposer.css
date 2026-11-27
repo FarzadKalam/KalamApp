@@ -22,6 +22,14 @@
 .ai-composer-send.ant-btn .anticon{display:inline-flex;align-items:center;justify-content:center;line-height:1}
 .ai-composer-send.ant-btn:disabled{background:color-mix(in srgb,var(--ai-composer-text) 9%,var(--ai-composer-surface));color:var(--ai-composer-muted)}
 .ai-composer-send.ant-btn:focus-visible{outline:2px solid var(--workspace-solid,rgb(var(--brand-600-rgb)));outline-offset:3px}
+.ai-composer-stop.ant-btn{position:relative}
+.ai-composer-stop-progress.anticon{position:absolute;inset:0;font-size:24px}
+.ai-composer-stop-square{width:9px;height:9px;border-radius:2px;background:currentColor}
+.ai-composer-follow-up{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px 12px;margin-bottom:8px;padding:8px 10px;border:1px solid var(--ai-composer-line);border-radius:12px;background:rgb(var(--brand-500-rgb)/.06)}
+.ai-composer-follow-up-text{flex:1 1 12rem;min-width:0;font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere;max-height:6rem;overflow:auto}
+.ai-composer-follow-up-actions{display:flex;flex-wrap:wrap;gap:4px;margin-inline-start:auto}
+@media(pointer:coarse){.ai-composer-footer .ai-composer-send.ant-btn{width:44px!important;min-width:44px!important;height:44px!important}.ai-composer-follow-up-actions .ant-btn{min-height:44px}}
+@media(prefers-reduced-motion:reduce){.ai-composer-stop-progress.anticon svg{animation:none}}
 .ai-composer-selections:empty,.ai-composer-transient:empty{display:none}
 .ai-composer-selections{display:flex;gap:6px;flex-wrap:wrap;padding-bottom:8px}
 .ai-composer-selection.ant-tag{display:inline-flex;align-items:center;gap:5px;max-width:100%;margin:0;padding:3px 8px;line-height:22px;white-space:normal;background:rgb(var(--brand-500-rgb)/.07);color:var(--ai-composer-text);border-color:var(--ai-composer-line);border-radius:9px;font-size:12px}

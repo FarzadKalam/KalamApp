@@ -262,6 +262,44 @@ describe('AiChatSurfaceV2', () => {
     expect(screen.getByText('در حال بررسی دانش سازمان…')).toBeInTheDocument();
   },15000);
 
+  it('edits and sends a queued steering message while cancelling the active response', async () => {
+    let previousSignal: AbortSignal | undefined;
+    fetchMock.mockImplementationOnce(async (_url, init) => {
+      previousSignal = init.signal;
+      return new Response(new ReadableStream<Uint8Array>({}), {
+        headers: { 'Content-Type': 'text/event-stream' },
+      });
+    }).mockResolvedValueOnce(streamResponse([
+      'event: done\ndata: {"success":true,"threadId":"new-thread","messageId":"steered-answer","answer":"پاسخ اصلاح‌شده"}\n\n',
+    ]));
+    renderSurface([{ pathname: '/ai', state: { aiInitialPrompt: 'گزارش سازمان', forceNewThread: true } }]);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const composer = screen.getByRole('textbox', { name: 'پیام به دستیار هوشمند' });
+    const composerFooter = composer.closest('.ai-message-composer') as HTMLElement;
+    expect(within(composerFooter).getByRole('button', { name: 'توقف پاسخ' })).toBeEnabled();
+    fireEvent.change(composer, { target: { value: 'فقط فروش' } });
+    fireEvent.click(within(composerFooter).getByRole('button', { name: 'آماده‌کردن پیام بعدی' }));
+    const queuedMessage = within(composerFooter).getByRole('region', { name: 'پیام بعدی' });
+    fireEvent.click(within(queuedMessage).getByRole('button', { name: 'ویرایش' }));
+    fireEvent.change(within(queuedMessage).getByRole('textbox'), { target: { value: 'فقط فروش آبان' } });
+    fireEvent.click(within(queuedMessage).getByRole('button', { name: 'ارسال' }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2), { timeout: 8000 });
+    expect(previousSignal?.aborted).toBe(true);
+    const secondRequest = JSON.parse(fetchMock.mock.calls[1][1].body);
+    expect(secondRequest.message).toContain('گزارش سازمان');
+    expect(secondRequest.message).toContain('فقط فروش آبان');
+    expect(secondRequest.userMessageText).toBe('فقط فروش آبان');
+    expect(await screen.findByText('پاسخ اصلاح‌شده', undefined, { timeout: 8000 })).toBeInTheDocument();
+  }, 45000);
+
+  it('explains a gateway timeout and preserves the prompt for retry', async () => {
+    fetchMock.mockResolvedValueOnce(new Response('Gateway Timeout', { status: 504 }));
+    renderSurface([{ pathname: '/ai', state: { aiInitialPrompt: 'گزارش ماهانه', forceNewThread: true } }]);
+    const timeoutText = 'در زمان مجاز پاسخی از مدل دریافت نشد. با درخواست دیگری یا یک مدل دیگر دوباره امتحان کنید.';
+    await waitFor(() => expect(screen.getAllByText(timeoutText).length).toBeGreaterThan(0));
+    expect(screen.getByRole('textbox', { name: 'پیام به دستیار هوشمند' })).toHaveValue('گزارش ماهانه');
+  }, 15000);
+
   it('does not auto-submit when a dashboard file is only queued for the new conversation', async () => {
     renderSurface([{
         pathname: '/ai',
