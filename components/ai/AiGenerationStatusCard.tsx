@@ -51,6 +51,7 @@ type AiGenerationStatusCardProps = {
   startedAtMs: number;
   onRecheck: () => void | Promise<void>;
   checking?: boolean;
+  statusDetail?: string;
   failedNote?: string | null;
   providerRaw?: any;
   onDismiss?: () => void;
@@ -62,6 +63,7 @@ const AiGenerationStatusCard: React.FC<AiGenerationStatusCardProps> = ({
   startedAtMs,
   onRecheck,
   checking = false,
+  statusDetail,
   failedNote = null,
   providerRaw = null,
   onDismiss,
@@ -104,7 +106,7 @@ const AiGenerationStatusCard: React.FC<AiGenerationStatusCardProps> = ({
         <span className="ai-generation-icon" aria-hidden="true">{KIND_ICON[kind]}</span>
         <div className="ai-generation-copy" role="status" aria-live="polite">
           <strong>{getAiAgent(kind).label}</strong>
-          <div>{failedNote ? 'نیازمند بررسی وضعیت' : `${getAiAgent(kind).activity}…`}</div>
+          <div>{failedNote ? 'نیازمند بررسی وضعیت' : statusDetail || `${getAiAgent(kind).activity}…`}</div>
         </div>
         <span className="ai-generation-timer" aria-label="زمان سپری‌شده" dir="ltr">
           {formatElapsed(elapsed)}
@@ -113,7 +115,7 @@ const AiGenerationStatusCard: React.FC<AiGenerationStatusCardProps> = ({
 
       {['image_generation', 'video_generation'].includes(kind) && <div className="ai-generation-preview" aria-hidden="true">{KIND_ICON[kind]}</div>}
       <div className="ai-generation-track" aria-hidden="true" />
-      <div className="ai-generation-hint mt-2">{KIND_HINT[kind]}</div>
+      {!statusDetail && <div className="ai-generation-hint mt-2">{KIND_HINT[kind]}</div>}
 
       {failedNote ? (
         <div className="ai-generation-note" role="status">{failedNote}</div>

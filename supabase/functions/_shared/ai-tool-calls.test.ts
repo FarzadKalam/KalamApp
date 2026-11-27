@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { appendStreamToolCalls, buildAgentToolResultFallback, executeAgentToolCalls, type AgentToolCall } from './ai-tool-calls';
+import { describeAiAttachments, describeAiToolActivity, describeModuleRead } from './ai-activity-details';
 const tools = [{ type: 'function', function: { name: 'read_organization_data' } }];
 const call = (): AgentToolCall => ({ id: 'call-1', type: 'function', function: { name: 'read_organization_data', arguments: '{"moduleId":"marketing_leads"}' } });
 describe('shared model tool calls', () => {
@@ -7,6 +8,22 @@ describe('shared model tool calls', () => {
     const execute = vi.fn(async () => ({ records: [], hasMore: false }));
     expect(await executeAgentToolCalls([call()], tools, execute)).toEqual([{ role: 'tool', tool_call_id: 'call-1', content: '{"records":[],"hasMore":false}' }]);
     expect(execute).toHaveBeenCalledWith('read_organization_data', { moduleId: 'marketing_leads' });
+  });
+  it('groups consecutive reads without changing response order or disclosing unrecognized modules', async () => {
+    const labels = { invoices: 'فاکتورهای فروش', projects: 'پروژه‌ها' } as Record<string, string>;
+    const reads = ['invoices', 'projects'].map((moduleId, index) => ({
+      ...call(), id: `read-${index}`, function: { name: 'read_organization_data', arguments: JSON.stringify({ moduleId }) },
+    }));
+    const observed: string[] = [];
+    const messages = await executeAgentToolCalls(reads, tools, async () => ({ records: [] }), (steps, run) => {
+      observed.push(describeModuleRead(steps.map(step => String(step.args.moduleId)), id => labels[id]).detail);
+      return run();
+    });
+    expect(observed).toEqual(['در حال بررسی فاکتورهای فروش و پروژه‌ها']);
+    expect(messages.map(message => message.tool_call_id)).toEqual(['read-0', 'read-1']);
+    expect(describeAiToolActivity('read_organization_data', { moduleId: 'PRIVATE_VALUE' }, id => labels[id])).toBeNull();
+    expect(describeAiAttachments(['application/pdf', 'audio/webm'])).toBe('در حال بررسی سند و فایل صوتی');
+    expect(describeAiToolActivity('read_agent_skills', {}, id => labels[id])?.detail).toBe('در حال خواندن دستورهای تخصصی ایجنت');
   });
   it('rejects an undeclared write tool instead of letting the model invent one', async () => {
     const execute = vi.fn(); const bad = call(); bad.function.name = 'execute_sql';

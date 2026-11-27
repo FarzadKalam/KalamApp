@@ -15,6 +15,7 @@ import { AI_INSTRUCTIONS_DOCUMENT_TYPE, isAiInstructionsConfigured } from '../..
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import { narrowProcessGuideContext } from '../../utils/processGuideContext';
 import { fetchSessionBootstrap } from '../../utils/sessionCache';
+import { deleteAiThreadDraft, getAiDraftScope, hasAiDraftConversation, readAiDraftConversation, rememberAiDraftConversation, useAiComposerDraft } from '../../hooks/useAiComposerDraft';
 import { fetchRecordReferenceLabels } from '../../utils/recordReference';
 import ProfileAvatar from '../common/ProfileAvatar';
 import AdaptiveIdentityPicker from '../AdaptiveIdentityPicker';
@@ -28,6 +29,7 @@ import AiCapabilityComposerActions, { normalizeAiComposerCapabilities, type AiCo
 import AiComposeModelBar, { resolveEffectiveCapability } from './AiComposeModelBar';
 import AiActivityStatus from './AiActivityStatus';
 import { getAiAgentLabel, resolveAiAgentId, parseAiAgentActivity, applyAiAgentActivity, type AiAgentActivity } from '../../supabase/functions/_shared/ai-agents';
+import { joinAiActivityLabels } from '../../supabase/functions/_shared/ai-activity-details';
 import AiGenerationStatusCard, { type AiGenerationKind } from './AiGenerationStatusCard';
 import AiAudioPlayer from './AiAudioPlayer';
 import AiMediaSettingsPopover, { type AiMediaSettings, type AiMediaSourceImage } from './AiMediaSettingsPopover';
@@ -182,14 +184,9 @@ const buildTaskBundlePendingStatusText = (inputs: Array<{ type?: string }>, capa
   const fileCount = types.filter((type) => type === 'file').length;
   const imageLabel = imageCount > 1 ? 'تصاویر' : 'تصویر';
   const voiceLabel = voiceCount > 1 ? 'فایل‌های صوتی' : 'فایل صوتی';
-  const fileLabel = fileCount > 1 ? 'فایل‌ها' : 'فایل';
-
-  if (imageCount && voiceCount) return `در حال تحلیل ${imageLabel} و ${voiceLabel} ارسالی شما هستم…`;
-  if (imageCount && fileCount) return `در حال تحلیل ${imageLabel} و ${fileLabel} ارسالی شما هستم…`;
-  if (voiceCount && fileCount) return `در حال تحلیل ${voiceLabel} و ${fileLabel} ارسالی شما هستم…`;
-  if (imageCount) return `در حال تحلیل ${imageLabel} ارسالی شما هستم…`;
-  if (voiceCount) return `در حال تحلیل ${voiceLabel} ارسالی شما هستم…`;
-  if (fileCount) return `در حال تحلیل ${fileLabel} ارسالی شما هستم…`;
+  const fileLabel = fileCount > 1 ? 'اسناد' : 'سند';
+  const attachments = joinAiActivityLabels([imageCount ? imageLabel : '', voiceCount ? voiceLabel : '', fileCount ? fileLabel : '']);
+  if (attachments) return `در حال بررسی ${attachments}…`;
   return buildAiPendingStatusText(capabilities, 'در حال آماده‌سازی پاسخ…');
 };
 
@@ -550,9 +547,9 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   const orgCurrency = useCurrencyConfig();
   const location = useLocation();
   const navigate = useNavigate();
-  const [input, setInput] = useState('');
+  const [draftScope, setDraftScope] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [threadId, setThreadId] = useState<string | null>(null);
+  const [threadId, setThreadId] = useState<string | null>(() => String(initialThreadId || '').trim() || null);
   const threadIdRef = useRef(threadId);
   const threadLoadSequence = useRef(0);
   threadIdRef.current = threadId;
@@ -843,6 +840,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   }, [liveContext, location.pathname, location.search]);
 
   const contextKey = useMemo(() => buildClientContextKey(context), [context]);
+  const draftContextKey = location.pathname === '/ai' ? 'route:/ai' : contextKey;
+  const [input, setInput] = useAiComposerDraft(draftScope, draftContextKey, threadId);
 
   const conversationContext = useMemo<AssistantContext>(() => (
     threadId && threadContext ? threadContext : context
@@ -1914,7 +1913,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     if (!active || !prompt || appliedInitialPromptRef.current === prompt) return;
     appliedInitialPromptRef.current = prompt;
     setInput((current) => (String(current || '').trim() ? current : prompt));
-  }, [active, initialPrompt]);
+  }, [active, initialPrompt, setInput]);
 
   useEffect(() => {
     if (conversationContext.intent !== 'process_guide') {
@@ -1945,6 +1944,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       try {
         const bootstrap = await fetchSessionBootstrap(supabase);
         if (!mounted) return;
+        setDraftScope(getAiDraftScope(bootstrap?.user?.id, bootstrap?.orgId));
         setCurrentUserView({
           name: String(bootstrap?.profile?.full_name || bootstrap?.user?.email || bootstrap?.profile?.mobile_1 || 'شما').trim() || 'شما',
           avatarUrl: bootstrap?.profile?.avatar_url || null,
@@ -2369,6 +2369,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
               usage: data.usage,
               clarification_questions: normalizeAiQuestions(data.questions),
               clarification_form: data.clarificationForm,
+              ...(Array.isArray(data?.agentActivities) ? { agent_activities: data.agentActivities } : {}),
               ...(data?.agentPlan ? { agent_plan: data.agentPlan } : {}),
               ...(Array.isArray(data?.selectedAgents) ? { selected_agents: data.selectedAgents } : {}),
               ...(data?.primaryAgent ? { agent_key: data.primaryAgent } : {}),
@@ -2421,6 +2422,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         ]);
         return;
       }
+      if (rawText === undefined) setInput(current => current ? current : text);
       setMessages(prev => prev.map(item => item.id === thinkingMessage.id ? {
         ...item, content: errorText,
         metadata: { ...item.metadata, pending_status: false, streaming: false, failed: true },
@@ -2429,11 +2431,11 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       setSubmitting(false);
     }
     return undefined;
-  }, [activeRecordCreationSchema, applyThreadTitleFromResponse, callAssistant, callAssistantStream, contextWithSelection, effectiveAgents, executeAutoRoute, input, message, pendingAiAction, processOperationMode, requestAutoRoute, selectedCapabilities, submitting, threadId]);
+  }, [activeRecordCreationSchema, applyThreadTitleFromResponse, callAssistant, callAssistantStream, contextWithSelection, effectiveAgents, executeAutoRoute, input, message, pendingAiAction, processOperationMode, requestAutoRoute, selectedCapabilities, setInput, submitting, threadId]);
 
   useEffect(() => {
     const prompt = String(initialPrompt || '').trim();
-    if (!active || initialFile || !autoSubmitInitialPrompt || !prompt || submitting || loadingThread) return;
+    if (!active || initialFile || !autoSubmitInitialPrompt || !prompt || submitting || loadingThread || (input.trim() && input.trim() !== prompt)) return;
     const expectedCapabilities = normalizeInitialCapabilities(initialCapabilities);
     const capabilitiesReady = expectedCapabilities.length === selectedCapabilities.length
       && expectedCapabilities.every((capability) => selectedCapabilities.includes(capability));
@@ -2447,7 +2449,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     autoSubmittedInitialPromptRef.current = signature;
     setInput('');
     void submitChat(prompt, normalizedInitialInputKind);
-  }, [active, autoSubmitInitialPrompt, initialCapabilities, initialPrompt, initialRecordCreationTargetModuleId, loadingThread, normalizedInitialInputKind, normalizedInitialThreadId, recordCreationTargetModuleId, selectedCapabilities, submitChat, submitting]);
+  }, [active, autoSubmitInitialPrompt, initialCapabilities, initialFile, initialPrompt, initialRecordCreationTargetModuleId, input, loadingThread, normalizedInitialInputKind, normalizedInitialThreadId, recordCreationTargetModuleId, selectedCapabilities, setInput, submitChat, submitting]);
 
   const submitImagePrompt = useCallback(async () => {
     const text = input.trim();
@@ -2890,7 +2892,9 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       const serverMessages = Array.isArray(data?.messages) ? data.messages as ChatMessage[] : [];
       const hasVisibleAssistantReply = serverMessages.some((item) => item?.role === 'assistant');
       if (serverMessages.length && hasVisibleAssistantReply) {
-        setMessages(serverMessages);
+        setMessages(serverMessages.map(item => item.id === data.messageId && data.agentActivities?.length
+          ? { ...item, metadata: { ...item.metadata, agent_activities: data.agentActivities } }
+          : item));
       } else {
         setMessages((prev) => [
           ...(serverMessages.length
@@ -2904,6 +2908,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
               usage: data.usage,
               clarification_questions: normalizeAiQuestions(data.questions),
               clarification_form: data.clarificationForm,
+              ...(Array.isArray(data?.agentActivities) ? { agent_activities: data.agentActivities } : {}),
               ...(data?.agentPlan ? { agent_plan: data.agentPlan } : {}),
               ...(Array.isArray(data?.selectedAgents) ? { selected_agents: data.selectedAgents } : {}),
               ...(data?.primaryAgent ? { agent_key: data.primaryAgent } : {}),
@@ -3170,6 +3175,10 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         throw new Error('گفتگو پیدا نشد یا اجازه حذف آن را ندارید.');
       }
       const deletedThreadId = threadId;
+      if (draftScope) {
+        deleteAiThreadDraft(draftScope, deletedThreadId);
+        rememberAiDraftConversation(draftScope, draftContextKey, null);
+      }
       setThreadId(null);
       setThreadContext(null);
       setMessages([]);
@@ -3183,17 +3192,18 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       deletingThreadRef.current = false;
       setDeletingThread(false);
     }
-  }, [callAssistant, message, onThreadDeleted, threadId]);
+  }, [callAssistant, draftContextKey, draftScope, message, onThreadDeleted, threadId]);
 
   const startFreshConversation = useCallback(() => {
     if (submitting || loadingThread) return;
     setThreadListOpen(false);
     if (onNewConversation) {onNewConversation();return;}
     if (conversationContext.mode==='record') restoredRecordThreadScopeRef.current=`${conversationContext.moduleId}:${conversationContext.recordId}`;
-    setThreadId(null);setThreadContext(null);setMessages([]);setThreadTitle('');setDraftThreadTitle('');setPendingAiAction(null);setInput('');
+    if (draftScope) rememberAiDraftConversation(draftScope, draftContextKey, null);
+    setThreadId(null);setThreadContext(null);setMessages([]);setThreadTitle('');setDraftThreadTitle('');setPendingAiAction(null);
     setImageEditSourceUrl(null);
     setBundleInputs(previous => {revokeBundleInputPreviewUrls(previous);return [];});
-  },[submitting,loadingThread,onNewConversation,conversationContext.mode,conversationContext.moduleId,conversationContext.recordId]);
+  },[submitting,loadingThread,onNewConversation,conversationContext.mode,conversationContext.moduleId,conversationContext.recordId,draftScope,draftContextKey]);
 
   const saveThreadSharing = useCallback(async () => {
     if (!threadId || sharingThread) return;
@@ -3315,6 +3325,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
               kind={pendingKind}
               startedAtMs={Number(item.metadata?.started_at) || Date.now()}
               checking={recheckingId === item.id}
+              statusDetail={pendingKind === 'document_analysis' ? messageText : undefined}
               failedNote={item.metadata?.failed_note || null}
               providerRaw={item.metadata?.provider_raw_response || item.metadata?.provider_error_raw || item.metadata?.avalai_raw_response || null}
               onRecheck={() => recheckPending(item)}
@@ -3326,7 +3337,9 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
             className={`ai-chat-message text-right${isUser ? ' is-user' : ' is-assistant w-full'}`}
           >
             {isUser ? messageText : waitingForResponse ? (
-              <AiActivityStatus agentId={effectiveAgentKey || respondingAgent} activities={activeAgents} onStop={isStreaming ? stopActiveStream : undefined} />
+              <AiActivityStatus agentId={respondingAgent} activities={activeAgents}
+                pendingDetail={item.metadata?.kind === 'voice_input' ? messageText : undefined}
+                onStop={isStreaming ? stopActiveStream : undefined} />
             ) : (
               <AiMessageRenderer
                 agentId={effectiveAgentKey || respondingAgent}
@@ -3711,15 +3724,20 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     if (restoredRecordThreadScopeRef.current === scopeKey) return;
     restoredRecordThreadScopeRef.current = scopeKey;
     void fetchDrawerThreads()
-      .then((rows) => {
+      .then(async (rows) => {
         setDrawerThreads(rows);
-        const mostRecentThreadId = String(rows?.[0]?.id || '').trim();
+        const session = hasAiDraftConversation(contextKey) ? await fetchSessionBootstrap(supabase) : null;
+        if (restoredRecordThreadScopeRef.current !== scopeKey || threadIdRef.current) return;
+        const scope = getAiDraftScope(session?.user?.id, session?.orgId);
+        const preferred = scope ? readAiDraftConversation(scope, contextKey) : null;
+        if (preferred === 'new') return;
+        const mostRecentThreadId = String(rows.find((row: any) => row.id === preferred)?.id || rows?.[0]?.id || '').trim();
         if (mostRecentThreadId) void loadThread(mostRecentThreadId);
       })
       .catch(() => {
         // The drawer action will show a readable error if the user opens it.
       });
-  }, [active, fetchDrawerThreads, loadThread, loadingThread, recordThreadScope, threadId]);
+  }, [active, contextKey, fetchDrawerThreads, loadThread, loadingThread, recordThreadScope, threadId]);
 
   return (
     <XProvider direction="rtl">

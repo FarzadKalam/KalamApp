@@ -1,5 +1,10 @@
 export type AgentToolCall = { id: string; type: 'function'; function: { name: string; arguments: string } };
 export type AgentToolExecutor = (name: string, input: unknown) => Promise<unknown>;
+type ValidatedTool = { id: string; name: string; args: Record<string, unknown> };
+type ToolResult = { role: 'tool'; tool_call_id: string; content: string };
+export type AgentToolBatchObserver = (calls: ValidatedTool[], run: () => Promise<ToolResult[]>) => Promise<ToolResult[]>;
+export const isOrganizationDataRead = (name: string) =>
+  ['read_organization_data', 'count_organization_data', 'aggregate_organization_data'].includes(name);
 
 const TOOL_FALLBACK_VALUE_LABELS: Record<string, string> = {
   status: 'وضعیت', is_active: 'فعال', description: 'توضیح', process_name: 'نام فرآیند',
@@ -41,11 +46,11 @@ export const buildAgentToolResultFallback = (messages: Array<{ content?: string 
 };
 
 /** One validator for streaming and non-streaming function calls. */
-export const executeAgentToolCalls = async (calls: AgentToolCall[], tools: any[], execute: AgentToolExecutor) => {
+export const executeAgentToolCalls = async (calls: AgentToolCall[], tools: any[], execute: AgentToolExecutor, observe?: AgentToolBatchObserver) => {
   if (!Array.isArray(calls) || calls.length > 8) throw new Error('تعداد فراخوانی ابزار در این مرحله معتبر نیست.');
   const allowed = new Set(tools.filter(tool => tool?.type === 'function').map(tool => tool.function?.name));
   const seen = new Set<string>();
-  const messages: Array<{ role: 'tool'; tool_call_id: string; content: string }> = [];
+  const validated: ValidatedTool[] = [];
   for (const call of calls) {
     if (!call?.id || seen.has(call.id) || call.type !== 'function' || !allowed.has(call.function?.name)) {
       throw new Error('مدل ابزار ناشناخته یا فراخوانی نامعتبر پیشنهاد داد.');
@@ -56,19 +61,37 @@ export const executeAgentToolCalls = async (calls: AgentToolCall[], tools: any[]
     let args: unknown;
     try { args = JSON.parse(raw); } catch { throw new Error('ورودی ساختاریافتهٔ ابزار معتبر نیست.'); }
     if (!args || typeof args !== 'object' || Array.isArray(args)) throw new Error('ورودی ابزار باید یک درخواست ساختاریافته باشد.');
+    validated.push({ id: call.id, name: call.function.name, args: args as Record<string, unknown> });
+  }
+  const runOne = async (call: ValidatedTool): Promise<ToolResult> => {
     let result: unknown;
     try {
-      result = await execute(call.function.name, args);
+      result = await execute(call.name, call.args);
     } catch {
       // A rejected read is feedback for the model, never an empty result or a
       // reason to bypass authorization. Do not expose raw transport errors.
-      if (!/^(read_|lookup_|describe_|get_organization_|count_organization_|aggregate_organization_)/.test(call.function.name)) throw new Error('اجرای ابزار عملیاتی تأیید نشد.');
+      if (!/^(read_|lookup_|describe_|get_organization_|count_organization_|aggregate_organization_)/.test(call.name)) throw new Error('اجرای ابزار عملیاتی تأیید نشد.');
       result = { success: false, code: 'read_request_rejected',
         message: 'درخواست خواندن تأیید نشد؛ این نتیجه به معنی نبود داده یا نداشتن مجوز کاربر نیست. نام ماژول و فیلد را با describe_organization_data بررسی کن، شرط‌ها را اصلاح کن و دوباره بخوان. برای ارتباط‌ها نام فیلد متعلق به رکورد مبدأ را بده. محدودیت واقعی دسترسی را دور نزن.' };
     }
     const content = JSON.stringify(result);
     if (!content || content.length > 64000) throw new Error('پاسخ ابزار بیش از اندازه است؛ درخواست کوچک‌تر یا صفحهٔ بعد را بررسی کنید.');
-    messages.push({ role: 'tool', tool_call_id: call.id, content });
+    return { role: 'tool', tool_call_id: call.id, content };
+  };
+  const groups: ValidatedTool[][] = [];
+  for (const call of validated) {
+    const previous = groups.at(-1);
+    if (observe && isOrganizationDataRead(call.name) && previous && isOrganizationDataRead(previous[0].name)) previous.push(call);
+    else groups.push([call]);
+  }
+  const messages: ToolResult[] = [];
+  for (const group of groups) {
+    const run = async () => {
+      const results: ToolResult[] = [];
+      for (const call of group) results.push(await runOne(call));
+      return results;
+    };
+    messages.push(...await (observe ? observe(group, run) : run()));
   }
   return messages;
 };

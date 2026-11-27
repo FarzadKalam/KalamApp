@@ -15,6 +15,8 @@ import AssistantPanel from './AssistantPanel';
 import type { AiComposerCapability } from './AiCapabilityComposerActions';
 import { getAgentDefinition, normalizeSelectedAgents, type AgentKey } from '../../utils/aiAgentCatalog';
 import { usePersonalAssistantTitle } from '../../hooks/usePersonalAssistantTitle';
+import { getAiDraftScope, hasAiDraftConversation, readAiDraftConversation, rememberAiDraftConversation } from '../../hooks/useAiComposerDraft';
+import { fetchSessionBootstrap } from '../../utils/sessionCache';
 import { AiAgentCameoFigure } from './AiAgentIcon';
 import './AiChatSurfaceV2.css';
 const AgentInboxSurface=React.lazy(()=>import('../notifications/messaging/MessagingSurfacePrototype'));
@@ -210,6 +212,13 @@ const AiChatSurfaceV2: React.FC = () => {
   const inboxAgent=normalizeSelectedAgents([searchParams.get('agent')||'lead_orchestrator'])[0]||'lead_orchestrator';
   const [threads, setThreads] = useState<AiThreadRow[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(()=>requestedThreadId);
+  const draftScopeRef = useRef<string | null>(null);
+  const selectionMadeRef = useRef(false);
+  const selectConversation = useCallback((threadId: string | null) => {
+    selectionMadeRef.current = true;
+    setActiveThreadId(threadId);
+    if (draftScopeRef.current) rememberAiDraftConversation(draftScopeRef.current, 'route:/ai', threadId);
+  }, []);
   const [threadListOpen, setThreadListOpen] = useState(false);
   const [loadingThreads, setLoadingThreads] = useState(true);
   const [aiCreditSummary, setAiCreditSummary] = useState<AiCreditSummary | null>(null);
@@ -284,17 +293,26 @@ const AiChatSurfaceV2: React.FC = () => {
   const loadThreads = useCallback(async (preferredThreadId?: string | null) => {
     setLoadingThreads(true);
     try {
+      const draftScopePromise = fetchSessionBootstrap(supabase)
+        .then(session => getAiDraftScope(session?.user?.id, session?.orgId))
+        .catch(() => null);
+      void draftScopePromise.then(scope => { draftScopeRef.current = scope; });
       const { data, error } = await supabase.functions.invoke('ai-assistant', { body: { action: 'list_threads', limit: THREAD_LIMIT } });
       if (error) throw error;
       if ((data as any)?.success === false) throw new Error(String((data as any)?.message || 'دریافت گفتگوها ناموفق بود.'));
       const nextThreads = (Array.isArray((data as any)?.threads) ? (data as any).threads as AiThreadRow[] : [])
         .filter((thread) => !isHiddenAssistantThread(thread));
       setThreads(sortAiThreads(nextThreads));
+      const scope = !requestedThreadId && !forceNewThread && hasAiDraftConversation('route:/ai') ? await draftScopePromise : null;
+      const remembered = scope ? readAiDraftConversation(scope, 'route:/ai') : null;
       setActiveThreadId((current) => {
         if(requestedThreadId)return requestedThreadId;
         if (preferredThreadId && nextThreads.some((thread) => String(thread.id) === String(preferredThreadId))) return preferredThreadId;
         if (current && nextThreads.some((thread) => String(thread.id) === String(current))) return current;
         if (forceNewThread) return null;
+        if (selectionMadeRef.current) return current;
+        if (remembered === 'new') return null;
+        if (remembered && nextThreads.some(thread => thread.id === remembered)) return remembered;
         return nextThreads[0]?.id || null;
       });
     } catch (error: any) {
@@ -371,11 +389,11 @@ const AiChatSurfaceV2: React.FC = () => {
     // A dashboard hand-off is consumed once.  Starting a new conversation
     // must never replay that hand-off prompt or attachment.
     setInitialRouteConsumed(true);
-    setActiveThreadId(null);
+    selectConversation(null);
     setNewConversationSeed((value) => value + 1);
     if(showAgentInbox||requestedThreadId)navigate('/ai',{replace:true});
     closeThreadList();
-  }, [closeThreadList,showAgentInbox,requestedThreadId,navigate]);
+  }, [closeThreadList,showAgentInbox,requestedThreadId,navigate,selectConversation]);
 
   useEffect(() => {
     if (typeof window === 'undefined' || !window.matchMedia('(hover: hover) and (pointer: fine)').matches) return;
@@ -510,14 +528,14 @@ const AiChatSurfaceV2: React.FC = () => {
                 key={thread.id}
                 title={title}
                 onClick={() => {
-                  setActiveThreadId(thread.id);
+                  selectConversation(thread.id);
                   if(showAgentInbox||requestedThreadId)navigate('/ai?thread='+encodeURIComponent(thread.id),{replace:true});
                   closeThreadList();
                 }}
                 onKeyDown={(event) => {
                   if (event.key !== 'Enter' && event.key !== ' ') return;
                   event.preventDefault();
-                  setActiveThreadId(thread.id);
+                  selectConversation(thread.id);
                   if(showAgentInbox||requestedThreadId)navigate('/ai?thread='+encodeURIComponent(thread.id),{replace:true});
                   closeThreadList();
                 }}
@@ -550,14 +568,14 @@ const AiChatSurfaceV2: React.FC = () => {
               tabIndex={0}
               key={thread.id}
               onClick={() => {
-                setActiveThreadId(thread.id);
+                selectConversation(thread.id);
                 if(showAgentInbox||requestedThreadId)navigate('/ai?thread='+encodeURIComponent(thread.id),{replace:true});
                 closeThreadList();
               }}
               onKeyDown={(event) => {
                 if (event.key !== 'Enter' && event.key !== ' ') return;
                 event.preventDefault();
-                setActiveThreadId(thread.id);
+                selectConversation(thread.id);
                 if(showAgentInbox||requestedThreadId)navigate('/ai?thread='+encodeURIComponent(thread.id),{replace:true});
                 closeThreadList();
               }}

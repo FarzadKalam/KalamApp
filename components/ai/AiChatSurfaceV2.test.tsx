@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import AiChatSurfaceV2 from './AiChatSurfaceV2';
+import * as sessionCache from '../../utils/sessionCache';
 vi.mock('../../moduleRegistry',()=>({MODULES:{customers:{id:'customers',titles:{fa:'مشتریان'},fields:[],blocks:[]}}}));
 vi.mock('../notifications/messaging/MessagingSurfacePrototype',()=>({default:({agentsOnly,initialConversationKey}:any)=><div data-testid="agent-inbox-surface">{agentsOnly?initialConversationKey:'wrong workspace'}</div>}));
 
@@ -49,6 +50,31 @@ vi.mock('../../supabaseClient', () => ({
 }));
 
 describe('AiChatSurfaceV2', () => {
+  it('reopens the last conversation with its unsent text after a page reload', async () => {
+    const bootstrap = vi.spyOn(sessionCache, 'fetchSessionBootstrap').mockResolvedValue({
+      user: { id: 'draft-user' }, orgId: 'draft-org', profile: null, roleId: null, permissions: null, loadedAt: 0,
+    });
+    try {
+      const first = renderSurface(['/ai?thread=thread-1']);
+      await waitFor(() => expect(invokeMock).toHaveBeenCalledWith('ai-assistant', expect.objectContaining({
+        body: expect.objectContaining({ action: 'get_ai_overview' }),
+      })));
+      const draft = 'پیش‌نویس ارسال‌نشده\n برای فروش';
+      fireEvent.change(screen.getByRole('textbox'), { target: { value: draft } });
+      first.unmount();
+      invokeMock.mockClear();
+      renderSurface(['/ai']);
+      await waitFor(() => expect(screen.getByRole('textbox')).toHaveValue(draft));
+      expect(invokeMock).toHaveBeenCalledWith('ai-assistant', expect.objectContaining({
+        body: expect.objectContaining({ action: 'get_thread', threadId: 'thread-1' }),
+      }));
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      bootstrap.mockRestore();
+      window.sessionStorage.clear();
+    }
+  });
+
   it('opens the requested notification thread rather than another recent conversation',async()=>{
     renderSurface(['/ai?thread=thread-1']);
     await waitFor(()=>expect(invokeMock).toHaveBeenCalledWith('ai-assistant',expect.objectContaining({body:expect.objectContaining({action:'get_thread',threadId:'thread-1'})})));

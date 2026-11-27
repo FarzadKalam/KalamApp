@@ -11,7 +11,7 @@ import {
   maskProviderApiKey,
 } from '../_shared/ai-provider-keys.ts';
 import { loadOrgPlanAccess } from '../_shared/org-plan-access.ts';
-import { executeAgentToolCalls, appendStreamToolCalls, buildAgentToolResultFallback, type AgentToolExecutor } from '../_shared/ai-tool-calls.ts';
+import { executeAgentToolCalls, appendStreamToolCalls, buildAgentToolResultFallback, isOrganizationDataRead, type AgentToolExecutor, type AgentToolBatchObserver } from '../_shared/ai-tool-calls.ts';
 import { AGENT_DATA_TOOLS, readAgentDataPage, countAgentData, aggregateAgentData, agentRecordMatchesViewConditions, tenantAgentDataModuleIds, type AgentDataAccess } from '../_shared/ai-agent-data.ts';
 import { assertProcessOperationPermissions, processOperationReceipt } from '../_shared/ai-process-operations.ts';
 import { createContextBudgetController, appendContinuationText, createContinuationDeltaBuffer, buildDeterministicContextSummary } from '../_shared/ai-context-lifecycle.ts';
@@ -144,7 +144,8 @@ import {
 import { resolvePersianCalendarContext } from '../_shared/persian-calendar-resolver.ts';
 import { PEYDA_REGULAR_WOFF2_BASE64 } from './peyda-font.ts';
 import { GEMINI_PREBUILT_VOICES, resolveSpeechModelProvider } from '../_shared/speech-model-provider.ts';
-import { applyAiAgentActivity, getAiAgentLabel, resolveAiAgentId, withAiAgentActivity, type AiAgentActivity, type AiAgentActivityReporter } from '../_shared/ai-agents.ts';
+import { createAiActivityTracker, getAiAgentLabel, resolveAiAgentId, withAiAgentActivity, type AiAgentActivityReporter } from '../_shared/ai-agents.ts';
+import { describeAiAttachments, describeAiToolActivity, describeModuleRead } from '../_shared/ai-activity-details.ts';
 import {
   estimateAiChargeCore,
   extractAvalaiTransactionCostCore,
@@ -248,7 +249,7 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-const FUNCTION_BUILD = 'ai-assistant-2026-11-18-stable-prompt-routing';
+const FUNCTION_BUILD = 'ai-assistant-2026-11-27-specific-activity';
 const PROVIDER_REQUEST_TIMEOUT_MS = 45000;
 // A streamed reply can legitimately take longer than a normal request.  Do
 // not abort a healthy stream merely because its total duration passes the
@@ -2820,21 +2821,29 @@ const fetchRelevantModuleContexts = async (
   authContext: any,
   message: string,
   pageContext: any,
+  options?: { plan: any; report?: AiAgentActivityReporter },
 ) => {
   const modules = detectRelevantModuleIds(message, pageContext)
     .filter((moduleId) => moduleId && moduleId !== pageContext?.moduleId)
+    .filter(moduleId => !options || canViewModuleWithPlan(options.plan, authContext.permissions, moduleId))
     .slice(0, MAX_RETRIEVED_CONTEXTS);
-  const contexts: any[] = [];
-  for (const moduleId of modules) {
-    const records = await fetchModuleRowsForQuery(supabaseUrl, serviceRoleKey, authContext, moduleId, message);
-    if (records.length) {
-      contexts.push({
+  const loadModules = async () => {
+    const found: any[] = [];
+    for (const moduleId of modules) {
+      const records = await fetchModuleRowsForQuery(supabaseUrl, serviceRoleKey, authContext, moduleId, message);
+      if (records.length) found.push({
         moduleId,
         summary: `نمونهٔ اولیهٔ رکوردهای مرتبط از ماژول ${moduleId}؛ برای بررسی کامل از ابزار داده و ادامهٔ صفحه‌ها استفاده کن. تعداد این نمونه، تعداد کل رکوردها نیست.`,
         records,
       });
     }
-  }
+    return found;
+  };
+  const contexts = modules.length
+    ? await withAiAgentActivity('organization_data', loadModules, options?.report, {
+      detail: describeModuleRead(modules, getAiModuleActivityLabel, 'related').detail,
+    })
+    : [];
   const reportContexts = await fetchRelevantReportContexts(
     supabaseUrl,
     serviceRoleKey,
@@ -2844,6 +2853,32 @@ const fetchRelevantModuleContexts = async (
   );
   contexts.push(...reportContexts);
   return contexts;
+};
+
+const getAiModuleActivityLabel = (moduleId: string) =>
+  Object.hasOwn(AI_RECORD_SCHEMAS, moduleId) ? AI_RECORD_SCHEMAS[moduleId].moduleLabel : undefined;
+
+const createAiToolActivityObserver = (
+  report: AiAgentActivityReporter, allowedModuleIds: string[],
+): AgentToolBatchObserver => {
+  const allowed = new Set(allowedModuleIds);
+  const previousTargets = new Set<string>();
+  const label = (moduleId: string) => allowed.has(moduleId) ? getAiModuleActivityLabel(moduleId) : undefined;
+  return (calls, run) => {
+    const first = calls[0];
+    if (!first) return run();
+    const targets = calls.flatMap(call => typeof call.args.moduleId === 'string' && label(call.args.moduleId) ? [call.args.moduleId] : []);
+    const dataRead = isOrganizationDataRead(first.name);
+    const continuing = targets.every(target => previousTargets.has(target)) || calls.every(call => Boolean(call.args.afterId || call.args.offset));
+    const description = dataRead
+      ? targets.length ? describeModuleRead(targets, label, continuing ? 'continuation' : undefined) : null
+      : describeAiToolActivity(first.name, first.args, label);
+    if (dataRead) targets.forEach(target => previousTargets.add(target));
+    return description ? withAiAgentActivity(description.agentId, run, report, {
+      ...description,
+      isFailed: results => results.length > 0 && results.every(result => JSON.parse(result.content)?.success === false),
+    }) : run();
+  };
 };
 
 const normalizeFaDigits = (value: string) => String(value || '')
@@ -4612,6 +4647,7 @@ const callChatCompletions = async (
     responseFormat?: Record<string, any> | null;
     tools?: any[];
     toolExecutor?: AgentToolExecutor;
+    observeTools?: AgentToolBatchObserver;
     maxToolRounds?: number;
     disableAutoCompaction?: boolean;
   }
@@ -4782,7 +4818,7 @@ const callChatCompletions = async (
       if (Array.isArray(toolCalls) && toolCalls.length > 0) {
         if (!options?.toolExecutor) throw new Error('مدل ابزار درخواست کرد ولی ابزار اجرایی برای این درخواست تعریف نشده است.');
         if (toolRounds >= maxToolRounds) throw new Error('بودجهٔ مراحل بررسی داده به پایان رسید؛ دامنهٔ بررسی را دقیق‌تر کنید یا ادامهٔ آن را بخواهید.');
-        const toolMessages = await executeAgentToolCalls(toolCalls, tools, options.toolExecutor);
+        const toolMessages = await executeAgentToolCalls(toolCalls, tools, options.toolExecutor, options.observeTools);
         latestToolFallback = buildAgentToolResultFallback(toolMessages) || latestToolFallback;
         const providerMessage=parsed?.choices?.[0]?.message || {};
         currentMessages = [...currentMessages, { role: 'assistant', content: content || null, tool_calls: toolCalls,
@@ -4886,6 +4922,7 @@ const callChatCompletionsStream = async (
     tools?: any[];
     onDelta?: (text: string) => void | Promise<void>;
     toolExecutor?: AgentToolExecutor;
+    observeTools?: AgentToolBatchObserver;
     maxToolRounds?: number;
     deadlineAt?: number;
   } = {},
@@ -5170,7 +5207,7 @@ const callChatCompletionsStream = async (
       if (!options.toolExecutor) throw new Error('ابزار اجرایی برای این پاسخ تعریف نشده است.');
       if (toolRounds >= maxToolRounds) throw new Error('بودجهٔ مراحل بررسی داده به پایان رسید؛ دامنهٔ بررسی را دقیق‌تر کنید یا ادامهٔ آن را بخواهید.');
       const toolCalls = [...pendingToolCalls.values()];
-      const toolMessages = await executeAgentToolCalls(toolCalls, tools, options.toolExecutor);
+      const toolMessages = await executeAgentToolCalls(toolCalls, tools, options.toolExecutor, options.observeTools);
       latestToolFallback = buildAgentToolResultFallback(toolMessages) || latestToolFallback;
       currentMessages = [...currentMessages, { role: 'assistant', content: roundContent || null, tool_calls: toolCalls,...providerContinuation }, ...toolMessages];
       toolRounds++;
@@ -8029,7 +8066,7 @@ const prepareChatRequest = async (
     loadTenantAiPlanContext(supabaseUrl, serviceRoleKey, authContext),
     loadOrgAiSettings(supabaseUrl, serviceRoleKey, authContext),
   ]);
-  const grounding = await loadCentralAiGrounding({
+  const loadGrounding = () => loadCentralAiGrounding({
     supabaseUrl,
     serviceRoleKey,
     authContext,
@@ -8039,6 +8076,8 @@ const prepareChatRequest = async (
     includeCalendar: !freeChatMode,
     includeDomainDirectory: false,
   });
+  const grounding = freeChatMode ? await loadGrounding()
+    : await withAiAgentActivity('agent_instructions', loadGrounding, reportActivity);
 
   let explicitAgentsInput = body?.agents ?? (body?.agentKey ? [body.agentKey] : (body?.agent_key ? [body.agent_key] : undefined));
   if (!freeChatMode && !normalizeSelectedAgents(explicitAgentsInput).length && body?.threadId && !body?.forceNewThread) {
@@ -8110,7 +8149,11 @@ const prepareChatRequest = async (
         recordId: null,
         relatedContexts: [],
       }
-    : await withAiAgentActivity('organization_data', () => buildPermittedPageContext(supabaseUrl, serviceRoleKey, authContext, rawContext), reportActivity);
+    : rawContext.moduleId && canViewModuleWithPlan(planContext, authContext.permissions, rawContext.moduleId)
+      ? await withAiAgentActivity('organization_data', () => buildPermittedPageContext(supabaseUrl, serviceRoleKey, authContext, rawContext), reportActivity, {
+        detail: `در حال خواندن زمینهٔ صفحهٔ ${getAiModuleActivityLabel(rawContext.moduleId) || 'جاری'}`,
+      })
+      : await buildPermittedPageContext(supabaseUrl, serviceRoleKey, authContext, rawContext);
 
   const mergedBlockedAgents = runnableAgents.blockedAgents;
   const canUseKnowledge = !freeChatMode && canUseOrganizationKnowledge(planContext);
@@ -8132,7 +8175,7 @@ const prepareChatRequest = async (
     requiresAuthoritativeProcessContext
       ? loadAiProcessContext(supabaseUrl, serviceRoleKey, authContext, pageContext)
       : Promise.resolve(null),
-    freeChatMode ? Promise.resolve([]) : withAiAgentActivity('organization_data', () => fetchRelevantModuleContexts(supabaseUrl, serviceRoleKey, authContext, message, pageContext), reportActivity),
+    freeChatMode ? Promise.resolve([]) : fetchRelevantModuleContexts(supabaseUrl, serviceRoleKey, authContext, message, pageContext, { plan: planContext, report: reportActivity }),
     freeChatMode ? Promise.resolve(null) : fetchFinancialAnalyticsContext(supabaseUrl, serviceRoleKey, authContext, message),
     captureAutomaticAiUserMemory(supabaseUrl, serviceRoleKey, authContext, message)
       .then(() => listAiUserMemories(supabaseUrl, serviceRoleKey, authContext, AI_USER_MEMORY_CONTEXT_ITEMS, true)),
@@ -8318,6 +8361,8 @@ const prepareChatRequest = async (
     message,
     body,
     toolExecutor: dataToolRuntime?.execute,
+    observeTools: reportActivity && dataToolRuntime
+      ? createAiToolActivityObserver(reportActivity, dataToolRuntime.access.modules.map(module => module.id)) : undefined,
     persistTaskProposal: dataToolRuntime?.persistTaskProposal,
     selectedCapabilities: mergedCapabilities,
     explicitCapabilities: selectedCapabilities,
@@ -8464,9 +8509,11 @@ const patchChatThreadAfterAssistant = async (
   });
 };
 
-const handleChat = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
+const handleChat = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any,
+  activityTracker = createAiActivityTracker(), attachmentMimeTypes: string[] = [],
+) => {
   const deadlineAt = Date.now() + STREAM_REQUEST_SOFT_DEADLINE_MS;
-  const prepared = await prepareChatRequest(supabaseUrl, serviceRoleKey, authContext, body);
+  const prepared = await prepareChatRequest(supabaseUrl, serviceRoleKey, authContext, body, activityTracker.report);
   const {
     message,
     selectedCapabilities,
@@ -8494,12 +8541,14 @@ const handleChat = async (supabaseUrl: string, serviceRoleKey: string, authConte
   } = prepared;
   let aiResult: any;
   try {
-    aiResult = await callChatCompletions(providerConfig, promptMessages, {
+    aiResult = await withAiAgentActivity(attachmentMimeTypes.length ? 'document_analysis' : resolveAiAgentId(capability),
+      () => callChatCompletions(providerConfig, promptMessages, {
       safetyIdentifier: `org_${authContext.orgId}_user_${authContext.userId}_cap_${capability}`,
       tools: nativeTools,
       toolExecutor: prepared.toolExecutor,
+      observeTools: prepared.observeTools,
       deadlineAt,
-    });
+    }), activityTracker.report, attachmentMimeTypes.length ? { detail: describeAiAttachments(attachmentMimeTypes) } : undefined);
   } catch (error: any) {
     const partialContent = getRecoverablePartialAiContent(error);
     if (partialContent) {
@@ -8511,6 +8560,7 @@ const handleChat = async (supabaseUrl: string, serviceRoleKey: string, authConte
         provider: providerConfig.provider,
         model: providerConfig.model,
         metadata: {
+          agent_activities: activityTracker.activities,
           context_summary: pageContext.summary,
           context_key: contextKey,
           company_currency_label: companyContext?.currency_label || null,
@@ -8575,6 +8625,7 @@ const handleChat = async (supabaseUrl: string, serviceRoleKey: string, authConte
       provider: providerConfig.provider,
       model: providerConfig.model,
       metadata: {
+        agent_activities: activityTracker.activities,
         context_summary: pageContext.summary,
         context_key: contextKey,
         company_currency_label: companyContext?.currency_label || null,
@@ -8631,6 +8682,7 @@ const handleChat = async (supabaseUrl: string, serviceRoleKey: string, authConte
     provider: aiResult.provider,
     model: aiResult.model,
     metadata: {
+      agent_activities: activityTracker.activities,
       context_summary: pageContext.summary,
       context_key: contextKey,
       company_currency_label: companyContext?.currency_label || null,
@@ -8730,6 +8782,7 @@ const handleChat = async (supabaseUrl: string, serviceRoleKey: string, authConte
     threadTitle: thread.title || null,
     userMessageId: userMessage?.id || null,
     messageId: assistantMessage?.id || null,
+    agentActivities: activityTracker.activities,
     answer: presentAiQuestionResponse(aiResult.content).answer,
       questions: presentAiQuestionResponse(aiResult.content).questions,
     proposedAction,
@@ -8775,11 +8828,8 @@ const handleChatStream = (supabaseUrl: string, serviceRoleKey: string, authConte
         }
       };
       const heartbeat = setInterval(() => send('ping', { at: Date.now() }), STREAM_HEARTBEAT_INTERVAL_MS);
-      let activities: AiAgentActivity[] = [];
-      const reportActivity: AiAgentActivityReporter = (activity) => {
-        activities = applyAiAgentActivity(activities, activity);
-        send('agent_activity', activity);
-      };
+      const activityTracker = createAiActivityTracker([], activity => send('agent_activity', activity));
+      const reportActivity = activityTracker.report;
       (async () => {
         let prepared: any = null;
         let preparationMs: number | null = null;
@@ -8810,11 +8860,12 @@ const handleChatStream = (supabaseUrl: string, serviceRoleKey: string, authConte
             safetyIdentifier: `org_${authContext.orgId}_user_${authContext.userId}_cap_${prepared.capability}`,
             tools: prepared.nativeTools,
             toolExecutor: prepared.toolExecutor,
+            observeTools: prepared.observeTools,
             deadlineAt: requestDeadlineAt,
             onDelta: (text) => {
               if (text) send('delta', { text });
             },
-          }), reportActivity);
+          }), reportActivity, { detail: 'در حال تحلیل درخواست با مدل' });
 
           const assistantMessage = await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
             thread_id: prepared.thread.id,
@@ -8835,7 +8886,7 @@ const handleChatStream = (supabaseUrl: string, serviceRoleKey: string, authConte
               tone_style: prepared.preferredToneStyle,
               channel: prepared.channel,
               cached_prefix_hash: prepared.cachedPrefixHash,
-              agent_activities: activities,
+              agent_activities: activityTracker.activities,
               clarification_questions: presentAiQuestionResponse(aiResult.content).questions,
               instagram_media_cards: Array.isArray(prepared.instagramMediaCards) ? prepared.instagramMediaCards : [],
               attachments: Array.isArray(aiResult.attachments) ? aiResult.attachments : [],
@@ -8977,7 +9028,7 @@ const handleChatStream = (supabaseUrl: string, serviceRoleKey: string, authConte
                 retrieved_context_modules: prepared.retrievedContexts.map((ctx: any) => ctx.moduleId),
                 web_search_used: prepared.webSearchResults.length > 0,
                 capabilities: prepared.selectedCapabilities,
-                agent_activities: activities,
+                agent_activities: activityTracker.activities,
                 capability: prepared.capability,
                 incomplete: true,
                 status: 'partial',
@@ -9100,9 +9151,12 @@ const handleChatStream = (supabaseUrl: string, serviceRoleKey: string, authConte
   });
 };
 
-const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
+const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any,
+  activityTracker = createAiActivityTracker(),
+) => {
   const suppliedFiles = (Array.isArray(body?.files) ? body.files : [body?.file || body?.attachment])
     .filter((item: any) => item && typeof item === 'object');
+  const attachmentMimeTypes = suppliedFiles.map((item: any) => String(item.mimeType || item.mime_type || item.type || '').toLowerCase());
   const file = suppliedFiles[0] || {};
   let prompt = String(body?.message || body?.prompt || 'این فایل را تحلیل کن.').trim() || 'این فایل را تحلیل کن.';
   const extractedTextEntries = suppliedFiles
@@ -9144,7 +9198,7 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
       capabilities: body?.primaryModelOnly === true ? [] : selectedCapabilities,
       message: textMessage,
       inputKind: 'file',
-    });
+    }, activityTracker, attachmentMimeTypes);
   }
 
   if (extractedText) prompt = [prompt, 'متن استخراج‌شده از بخشی از پیوست‌ها:', extractedText].join('\n\n');
@@ -9373,21 +9427,22 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
   let analysisError: any = null;
   let primaryAnalysisError = '';
   try {
-    aiResult = await runNativeAgentInput({ hasNativeInput: fileParts.length > 0,
+    const observeTools = fileDataTools ? createAiToolActivityObserver(activityTracker.report, fileDataTools.access.modules.map(module => module.id)) : undefined;
+    aiResult = await withAiAgentActivity('document_analysis', () => runNativeAgentInput({ hasNativeInput: fileParts.length > 0,
       primary: () => callChatCompletions(providerConfig, promptMessages, {
         safetyIdentifier: `org_${authContext.orgId}_user_${authContext.userId}_cap_${capability}`,
-        tools: fileDataTools?.tools, toolExecutor: fileDataTools?.execute,
+        tools: fileDataTools?.tools, toolExecutor: fileDataTools?.execute, observeTools,
       }),
       fallback: async (error) => {
         const specialized = await resolveSpecializedProviderConfig(supabaseUrl, serviceRoleKey, authContext, 'document_analysis');
         const result = await callChatCompletions(specialized, promptMessages, {
           safetyIdentifier: `org_${authContext.orgId}_user_${authContext.userId}_cap_document_analysis_fallback`,
-          tools: fileDataTools?.tools, toolExecutor: fileDataTools?.execute,
+          tools: fileDataTools?.tools, toolExecutor: fileDataTools?.execute, observeTools,
         });
         result.analysisFallback = { used: true, primary_model: providerConfig.model, primary_error: shortenProviderError(String((error as any)?.message || error)) };
         return result;
       },
-    });
+    }), activityTracker.report, { detail: describeAiAttachments(attachmentMimeTypes) });
   } catch (error: any) {
     analysisError = error;
     primaryAnalysisError = String(error?.message || error || '').trim();
@@ -9405,6 +9460,7 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
       provider: providerConfig.provider,
       model: providerConfig.model,
       metadata: {
+        agent_activities: activityTracker.activities,
         context_summary: pageContext.summary,
         context_key: contextKey,
         company_currency_label: companyContext?.currency_label || null,
@@ -9462,6 +9518,7 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
     provider: aiResult.provider,
     model: aiResult.model,
     metadata: {
+      agent_activities: activityTracker.activities,
       context_summary: pageContext.summary,
       context_key: contextKey,
       company_currency_label: companyContext?.currency_label || null,
@@ -9587,6 +9644,7 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
     threadId: thread.id,
     userMessageId: userMessage?.id || null,
     messageId: assistantMessage?.id || null,
+    agentActivities: activityTracker.activities,
     answer: presentAiQuestionResponse(aiResult.content).answer,
       questions: presentAiQuestionResponse(aiResult.content).questions,
     proposedAction,
@@ -9611,7 +9669,9 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
   });
 };
 
-const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
+const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any,
+  activityTracker = createAiActivityTracker(),
+) => {
   const isUpdate = String(body?.action || '').trim() === 'update_record_from_prompt'
     || String(body?.outputMode || body?.output_mode || '').trim() === 'update_record';
   const mutationAction = isUpdate ? 'update_record_from_prompt' : 'create_record_from_prompt';
@@ -9942,12 +10002,14 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
   const mutationCallOptions = { tools: [...relationIntake.tools,...recordTools.tools,...(intakeDataTools?.tools || []).filter((tool:any) => !fieldToolNames.has(tool.function.name) && /^(read_|describe_|get_organization_|count_|aggregate_)/.test(tool.function.name))],
     toolExecutor: (name:string,args:any) => name === 'prepare_relation_record' ? relationIntake.execute(args)
       : fieldToolNames.has(name) ? recordTools.execute(name,args) : intakeDataTools!.execute(name,args),
+    observeTools: createAiToolActivityObserver(activityTracker.report, [targetModuleId, ...(intakeDataTools?.access.modules.map(module => module.id) || [])]),
     safetyIdentifier: `org_${authContext.orgId}_user_${authContext.userId}_cap_${capability}_${isUpdate ? 'update' : 'create'}_record`,
     responseFormat: { type: 'json_object' },
   };
   let aiResult;
   try {
-    aiResult = await runNativeAgentInput({ hasNativeInput: modelFiles.some((item: any) => !String(item.text || '').trim()),
+    aiResult = await withAiAgentActivity(modelFiles.length ? 'document_analysis' : 'record_creation', () =>
+      runNativeAgentInput({ hasNativeInput: modelFiles.some((item: any) => !String(item.text || '').trim()),
       primary: () => callChatCompletions(providerConfig, mutationMessages, mutationCallOptions),
       fallback: async (error) => {
         const specialized = await resolveSpecializedProviderConfig(supabaseUrl, serviceRoleKey, authContext, 'document_analysis');
@@ -9955,7 +10017,9 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
         result.analysisFallback = { used: true, primary_model: providerConfig.model, primary_error: shortenProviderError(String((error as any)?.message || error)) };
         return result;
       },
-    });
+    }), activityTracker.report, modelFiles.length ? {
+      detail: describeAiAttachments(modelFiles.map((file: any) => String(file.mimeType || file.mime_type || '').toLowerCase())),
+    } : undefined);
     if (aiResult.incomplete) {
       const parsedPartial = parseJsonSafe(aiResult.content);
       if (!parsedPartial || typeof parsedPartial !== 'object') {
@@ -10137,6 +10201,7 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
       provider: aiResult.provider,
       model: aiResult.model,
       metadata: {
+        agent_activities: activityTracker.activities,
         context_key: contextKey,
         usage: aiResult.usageMetadata,
         avalai_request_id: aiResult.requestId || null,
@@ -10227,6 +10292,7 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
       threadId: thread.id,
       userMessageId: userMessage?.id || null,
       messageId: assistantMessage?.id || null,
+      agentActivities: activityTracker.activities,
       answer: hasPayload ? `${reply}\n\nبرای ${mutationVerb} رکورد، تایید کاربر لازم است.` : reply,
       questions,
       clarificationForm,
@@ -10432,7 +10498,7 @@ const transcribeTaskBundleVoices = async (
   authContext: any,
   inputs: any[],
   decisionProviderConfig?: any,
-  options: { preferDedicatedTranscription?: boolean } = {},
+  options: { preferDedicatedTranscription?: boolean; reportActivity?: AiAgentActivityReporter } = {},
 ) => {
   const transcripts = inputs.filter((input) => input.audio && String(input.text || '').trim()).map((input) => ({
     inputId: input.id,
@@ -10442,59 +10508,61 @@ const transcribeTaskBundleVoices = async (
   }));
   const voiceInputs = inputs.filter((input) => input.audio?.data && !String(input.text || '').trim());
   if (!voiceInputs.length) return transcripts;
-  const baseProviderConfig = decisionProviderConfig
-    || await resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext, 'dashboard_chat');
-  await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, baseProviderConfig.orgAiSettings, 'voice_input');
-  for (const input of voiceInputs) {
-    const audioData = String(input.audio.data || '');
-    const mimeType = String(input.audio.mimeType || 'audio/webm');
-    const filename = String(input.audio.filename || 'voice.webm');
-    // Call recordings are often considerably larger than browser snippets.
-    // Sending those blobs to a general chat model first causes avoidable
-    // timeouts before the dedicated STT fallback gets a chance to run.
-    const shouldUseDedicatedTranscription = options.preferDedicatedTranscription
-      || input.type === 'audio'
-      || audioData.length > 1_500_000;
-    let result: any = null;
-    let decisionEngineError = '';
-    if (shouldUseDedicatedTranscription) {
-      const specializedProviderConfig = await resolveSpecializedProviderConfig(supabaseUrl, serviceRoleKey, authContext, 'voice_input');
-      result = await callAudioTranscription(specializedProviderConfig, audioData, mimeType, filename);
-      result.source = 'specialized_voice_engine';
-    } else {
-      try {
-        result = await callDecisionEngineAudioTranscription(baseProviderConfig, audioData, mimeType, filename);
-      } catch (error: any) {
-        decisionEngineError = String(error?.message || error || '').trim();
-        console.warn('Decision engine voice analysis failed; falling back to specialized voice model', error);
+  return await withAiAgentActivity('voice_input', async () => {
+    const baseProviderConfig = decisionProviderConfig
+      || await resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext, 'dashboard_chat');
+    await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, baseProviderConfig.orgAiSettings, 'voice_input');
+    for (const input of voiceInputs) {
+      const audioData = String(input.audio.data || '');
+      const mimeType = String(input.audio.mimeType || 'audio/webm');
+      const filename = String(input.audio.filename || 'voice.webm');
+      // Call recordings are often considerably larger than browser snippets.
+      // Sending those blobs to a general chat model first causes avoidable
+      // timeouts before the dedicated STT fallback gets a chance to run.
+      const shouldUseDedicatedTranscription = options.preferDedicatedTranscription
+        || input.type === 'audio'
+        || audioData.length > 1_500_000;
+      let result: any = null;
+      let decisionEngineError = '';
+      if (shouldUseDedicatedTranscription) {
         const specializedProviderConfig = await resolveSpecializedProviderConfig(supabaseUrl, serviceRoleKey, authContext, 'voice_input');
         result = await callAudioTranscription(specializedProviderConfig, audioData, mimeType, filename);
         result.source = 'specialized_voice_engine';
+      } else {
+        try {
+          result = await callDecisionEngineAudioTranscription(baseProviderConfig, audioData, mimeType, filename);
+        } catch (error: any) {
+          decisionEngineError = String(error?.message || error || '').trim();
+          console.warn('Decision engine voice analysis failed; falling back to specialized voice model', error);
+          const specializedProviderConfig = await resolveSpecializedProviderConfig(supabaseUrl, serviceRoleKey, authContext, 'voice_input');
+          result = await callAudioTranscription(specializedProviderConfig, audioData, mimeType, filename);
+          result.source = 'specialized_voice_engine';
+        }
       }
+      transcripts.push({
+        inputId: input.id,
+        label: input.label || 'فایل صوتی',
+        transcript: result.transcript,
+        source: result.source || 'decision_engine',
+      });
+      await recordAiUsageLedger(supabaseUrl, serviceRoleKey, authContext, {
+        capability: 'voice_input',
+        provider: result.provider,
+        model: result.model,
+        requestId: result.requestId,
+        usageMetadata: result.usageMetadata,
+        metadata: {
+          source: 'task_bundle_voice_transcription',
+          transcription_engine: result.source || 'decision_engine',
+          decision_engine_error: decisionEngineError ? shortenProviderError(decisionEngineError) : null,
+          bundle_input_id: input.id,
+          mime_type: mimeType,
+          duration_ms: input.audio.durationMs || 0,
+        },
+      });
     }
-    transcripts.push({
-      inputId: input.id,
-      label: input.label || 'فایل صوتی',
-      transcript: result.transcript,
-      source: result.source || 'decision_engine',
-    });
-    await recordAiUsageLedger(supabaseUrl, serviceRoleKey, authContext, {
-      capability: 'voice_input',
-      provider: result.provider,
-      model: result.model,
-      requestId: result.requestId,
-      usageMetadata: result.usageMetadata,
-      metadata: {
-        source: 'task_bundle_voice_transcription',
-        transcription_engine: result.source || 'decision_engine',
-        decision_engine_error: decisionEngineError ? shortenProviderError(decisionEngineError) : null,
-        bundle_input_id: input.id,
-        mime_type: mimeType,
-        duration_ms: input.audio.durationMs || 0,
-      },
-    });
-  }
-  return transcripts;
+    return transcripts;
+  }, options.reportActivity, { detail: 'در حال تبدیل فایل صوتی به متن' });
 };
 
 const buildTaskBundlePrompt = (
@@ -10860,6 +10928,7 @@ const handlePrimaryModelTaskBundle = async (
   body: any,
   inputs: any[],
 ) => {
+  const activityTracker = createAiActivityTracker();
   const rawContext = normalizeContext(body?.context || {});
   const baseCapability = rawContext.mode === 'record' ? 'record_chat' : 'dashboard_chat';
   const existingThread = body?.threadId
@@ -10877,7 +10946,7 @@ const handlePrimaryModelTaskBundle = async (
     authContext,
     inputs,
     undefined,
-    { preferDedicatedTranscription: true },
+    { preferDedicatedTranscription: true, reportActivity: activityTracker.report },
   );
   const prompt = buildTaskBundlePrompt(body, inputs, transcripts, previousTaskContext);
   const attachments = inputs.map((input: any) => input?.file).filter(Boolean);
@@ -10897,7 +10966,7 @@ const handlePrimaryModelTaskBundle = async (
       file: attachments[0],
       inputKind: 'task_bundle',
       primaryModelOnly: true,
-    });
+    }, activityTracker);
   }
 
   return await handleChat(supabaseUrl, serviceRoleKey, authContext, {
@@ -10909,10 +10978,11 @@ const handlePrimaryModelTaskBundle = async (
     message: prompt,
     inputKind: 'task_bundle',
     primaryModelOnly: true,
-  });
+  }, activityTracker, transcripts.length ? ['audio/'] : []);
 };
 
 const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
+  const activityTracker = createAiActivityTracker();
   const selectedCapabilities = Array.from(new Set(Array.isArray(body?.capabilities)
     ? body.capabilities.map((item: any) => String(item || '').trim()).filter(Boolean)
     : []));
@@ -10962,6 +11032,7 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
     authContext,
     inputs,
     decisionProviderConfig,
+    { reportActivity: activityTracker.report },
   );
   const voipAnalysisContext = await buildVoipAnalysisContext(
     supabaseUrl,
@@ -11051,6 +11122,7 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
     || !!previousTaskContext);
 
   let analysisText = String(previousTaskContext?.summary || previousTaskContext?.analysis || '').trim();
+  let analyzedAttachmentCount = 0;
   if (shouldRunAnalysis) {
     const analysisPrompt = [
       'این مرحله تحلیل مشترک باندل است. همه ورودی‌ها و زمینه قبلی همین گفتگو را یکپارچه کن.',
@@ -11071,7 +11143,7 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
           file: currentFile,
           threadId: workingThreadId,
           metadata: { ...(body?.metadata || {}), task_bundle: bundleMeta, bundle_file_index: fileIndex, internal_agent_step: true },
-        }));
+        }, activityTracker));
         if (analysisData?.success === false) {
           if (files.length === 1) {
             return json(200, { ...analysisData, taskBundle: bundleMeta, results: collectedResults, messages: filterVisibleAiMessages(collectedMessages) });
@@ -11079,7 +11151,10 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
           continue;
         }
         const part = String(analysisData?.answer || analysisData?.message || '').trim();
-        if (part) analysisParts.push(`نتیجه ${filename}:\n${part}`);
+        if (part) {
+          analysisParts.push(`نتیجه ${filename}:\n${part}`);
+          analyzedAttachmentCount += 1;
+        }
       }
     } else {
       const analysisData = await runStep('document_analysis', handleChat(supabaseUrl, serviceRoleKey, authContext, {
@@ -11091,7 +11166,7 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
         inputKind: 'task_bundle_analysis',
         threadId: workingThreadId,
         metadata: { ...(body?.metadata || {}), task_bundle: bundleMeta, internal_agent_step: true },
-      }));
+      }, activityTracker));
       if (analysisData?.success === false) {
         return json(200, { ...analysisData, taskBundle: bundleMeta, results: collectedResults, messages: filterVisibleAiMessages(collectedMessages) });
       }
@@ -11124,7 +11199,7 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
       threadId: workingThreadId,
       previewOnly: true,
       metadata: { ...(body?.metadata || {}), task_bundle: bundleMeta, internal_agent_input: true, public_user_message_id: publicUserMessage?.id },
-    }));
+    }, activityTracker));
     if (data?.answer) finalAnswerParts.push(String(data.answer));
   }
 
@@ -11134,11 +11209,11 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
       action: 'process_operation_from_prompt',
       message: sharedPrompt,
       inputKind: 'task_bundle',
-      ...(calendarReadsFilesDirectly ? { files } : { file: firstFile }),
+      ...(calendarReadsFilesDirectly ? { files } : { file: analyzedAttachmentCount < files.length ? firstFile : null }),
       threadId: workingThreadId,
       previewOnly: true,
       metadata: { ...(body?.metadata || {}), task_bundle: bundleMeta, internal_agent_input: true, public_user_message_id: publicUserMessage?.id },
-    }));
+    }, activityTracker));
     if (data?.answer) finalAnswerParts.push(String(data.answer));
   }
 
@@ -11173,7 +11248,7 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
       inputKind: 'task_bundle',
       threadId: workingThreadId,
       metadata: { ...(body?.metadata || {}), task_bundle: bundleMeta, internal_agent_input: true, public_user_message_id: publicUserMessage?.id },
-    }));
+    }, activityTracker, transcripts.length && !analysisText ? ['audio/'] : []));
     if (data?.answer) finalAnswerParts.push(String(data.answer));
   }
 
@@ -11259,6 +11334,7 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
   return json(200, {
     success: true,
     threadId: workingThreadId,
+    agentActivities: activityTracker.activities,
     messageId: clarificationResult?.messageId || voiceOutput?.message?.id || collectedResults[collectedResults.length - 1]?.messageId || null,
     answer: finalAnswer,
     questions: clarificationResult?.questions || [],
@@ -12013,7 +12089,9 @@ const executeAiProcessOperation = async (
   }
 };
 
-const handleProcessOperationFromPrompt = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
+const handleProcessOperationFromPrompt = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any,
+  activityTracker = createAiActivityTracker(),
+) => {
   const prompt = String(body?.message || body?.prompt || '').trim();
   if (!prompt) return json(400, { success: false, message: 'متن اقدام فرآیندی خالی است.' });
   const rawContext = normalizeContext(body?.context || {});
@@ -12111,7 +12189,7 @@ const handleProcessOperationFromPrompt = async (supabaseUrl: string, serviceRole
       related_records: pageContext.relatedContexts || [],
     } : {}),
   });
-  const aiResult = await callChatCompletions(providerConfig, [
+  const aiResult = await withAiAgentActivity(files.length ? 'document_analysis' : 'process_operation', () => callChatCompletions(providerConfig, [
     ...(processTools ? [processTools.systemMessage] : []),
     {
       role: 'user',
@@ -12119,8 +12197,11 @@ const handleProcessOperationFromPrompt = async (supabaseUrl: string, serviceRole
     },
   ], {
     tools: processTools?.tools, toolExecutor: processTools?.execute, maxToolRounds: 12,
+    observeTools: processTools ? createAiToolActivityObserver(activityTracker.report, processTools.access.modules.map(module => module.id)) : undefined,
     safetyIdentifier: `org_${authContext.orgId}_user_${authContext.userId}_cap_${capability}_process_operation`,
-  });
+  }), activityTracker.report, files.length ? {
+    detail: describeAiAttachments(files.map((file: any) => String(file.mimeType || file.mime_type || '').toLowerCase())),
+  } : { detail: 'در حال آماده‌سازی پیشنهاد فرآیند' });
   const parsed = extractJsonObjectFromText(aiResult.content) || {};
   const clarificationQuestions = normalizeAiClarificationQuestions(parsed?.questions);
   const needsClarification = parsed?.needs_clarification === true || parsed?.needsClarification === true || clarificationQuestions.length > 0;
@@ -12158,6 +12239,7 @@ const handleProcessOperationFromPrompt = async (supabaseUrl: string, serviceRole
       provider: aiResult.provider,
       model: aiResult.model,
       metadata: {
+        agent_activities: activityTracker.activities,
         action: 'process_operation_from_prompt',
         capability,
         context_key: contextKey,
@@ -12201,6 +12283,7 @@ const handleProcessOperationFromPrompt = async (supabaseUrl: string, serviceRole
       threadId: thread.id,
       userMessageId: userMessage?.id || null,
       messageId: assistantMessage?.id || null,
+      agentActivities: activityTracker.activities,
       answer: reply,
       questions: normalizeAiQuestions(parsed.questions),
       provider: aiResult.provider,
@@ -12227,6 +12310,7 @@ const handleProcessOperationFromPrompt = async (supabaseUrl: string, serviceRole
       provider: aiResult.provider,
       model: aiResult.model,
       metadata: {
+        agent_activities: activityTracker.activities,
         action: 'process_operation_from_prompt',
         capability,
         context_key: contextKey,
@@ -12292,6 +12376,7 @@ const handleProcessOperationFromPrompt = async (supabaseUrl: string, serviceRole
       threadId: thread.id,
       userMessageId: userMessage?.id || null,
       messageId: assistantMessage?.id || null,
+      agentActivities: activityTracker.activities,
       answer: `${reply}\n\nبرای اجرای این اقدام، تایید کاربر لازم است.`,
       proposedAction: {
         id: proposedAction?.id || null,

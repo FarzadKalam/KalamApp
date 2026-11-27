@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   compareAppVersions,
+  getUnreadInstalledRelease,
+  acknowledgeAppVersion,
+  readAcknowledgedAppVersion,
   resolveAppVersionBannerMode,
   validateAppVersionManifest,
 } from './appVersionUpdate';
@@ -55,5 +58,18 @@ describe('appVersionUpdate', () => {
       '2.0.5.2',
     ]);
     expect(manifest?.releases[0].changes).toEqual(['نسخه جاری']);
+  });
+
+  it('shows the installed release without requiring a prior refresh click and persists acknowledgement per account', () => {
+    const manifest = validateAppVersionManifest({ version: '3.31.0', changes: ['آینده'],
+      releases: [{ version: '3.30.2', changes: ['نسخهٔ فعال'] }] })!;
+    const accountId = 'returning-account';
+    acknowledgeAppVersion(accountId, '3.29.0');
+    expect(getUnreadInstalledRelease(manifest, '3.30.2', readAcknowledgedAppVersion(accountId))?.changes)
+      .toEqual(['نسخهٔ فعال']);
+    acknowledgeAppVersion(accountId, '3.30.2');
+    expect(getUnreadInstalledRelease(manifest, '3.30.2', readAcknowledgedAppVersion(accountId))).toBeNull();
+    expect(getUnreadInstalledRelease(manifest, '3.30.2', readAcknowledgedAppVersion('different-account'))?.version)
+      .toBe('3.30.2');
   });
 });

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Button, App, Progress, Tag } from 'antd';
+import { Button, App, Tag } from 'antd';
 import {
   CheckCircleOutlined,
   DownOutlined,
@@ -15,116 +15,78 @@ import {
   fetchAppVersionManifest,
   hasReachedRefreshAttemptLimit,
   prepareAppRefresh,
+  acknowledgeAppVersion,
+  getUnreadInstalledRelease,
+  isNewerAppVersion,
+  readAcknowledgedAppVersion,
   resolveAppVersionBannerMode,
-  type AppVersionBannerMode,
   type AppVersionManifest,
 } from '../utils/appVersionUpdate';
 
 const POLL_INTERVAL_MS = 60_000;
 const INITIAL_CHECK_DELAY_MS = 8_000;
-const DEFAULT_COUNTDOWN_SECONDS = 20;
 
-const getLocationSignature = (location: ReturnType<typeof useLocation>) =>
-  `${location.pathname}${location.search}${location.hash}`;
-
-const AppVersionUpdateBanner: React.FC = () => {
+const AppVersionUpdateBanner: React.FC<{ accountId: string }> = ({ accountId }) => {
   const { message } = App.useApp();
-  const location = useLocation();
-  const locationSignature = getLocationSignature(location);
-  const previousLocationSignatureRef = useRef(locationSignature);
+  const { pathname } = useLocation();
+  const previousPathRef = useRef(pathname);
   const refreshStartedRef = useRef(false);
-  const completedVersionRef = useRef<string | null>(null);
   const [manifest, setManifest] = useState<AppVersionManifest | null>(null);
-  const [mode, setMode] = useState<AppVersionBannerMode>('available');
-  const [countdown, setCountdown] = useState(DEFAULT_COUNTDOWN_SECONDS);
+  const [seenVersion, setSeenVersion] = useState(() => readAcknowledgedAppVersion(accountId));
   const [expanded, setExpanded] = useState(false);
-  const [deferredUntilNavigation, setDeferredUntilNavigation] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const installedRelease = manifest ? getUnreadInstalledRelease(manifest, CURRENT_APP_VERSION, seenVersion) : null;
+  const available = !!manifest && isNewerAppVersion(manifest.version, CURRENT_APP_VERSION);
+  const mode = manifest ? resolveAppVersionBannerMode(manifest.version, CURRENT_APP_VERSION, installedRelease?.version) : null;
+  const displayedRelease = installedRelease || manifest;
   const releaseHistory = useMemo(
     () => manifest?.releases || [],
     [manifest?.releases]
   );
   const releasedAtLabel = useMemo(
-    () => manifest?.releasedAt ? safeJalaliFormat(manifest.releasedAt, 'YYYY/MM/DD HH:mm') : '',
-    [manifest?.releasedAt]
+    () => displayedRelease?.releasedAt ? safeJalaliFormat(displayedRelease.releasedAt, 'YYYY/MM/DD HH:mm') : '',
+    [displayedRelease?.releasedAt]
   );
 
   useEffect(() => {
-    const completedVersion = consumeCompletedAppRefreshIntent(CURRENT_APP_VERSION);
-    if (completedVersion) {
-      completedVersionRef.current = completedVersion;
-    }
+    consumeCompletedAppRefreshIntent(CURRENT_APP_VERSION);
   }, []);
 
   useEffect(() => {
     let disposed = false;
-    let controller: AbortController | null = null;
-
     const checkVersion = async () => {
       if (disposed) return;
-      controller?.abort();
-      controller = new AbortController();
-
       try {
-        const nextManifest = await fetchAppVersionManifest(controller.signal);
-        if (disposed) return;
-        const nextMode = resolveAppVersionBannerMode(
-          nextManifest.version,
-          CURRENT_APP_VERSION,
-          completedVersionRef.current
-        );
-
-        if (nextMode === 'available') {
-          setMode('available');
-          setManifest((prev) => {
-            if (prev?.version === nextManifest.version) return prev;
-            setCountdown(DEFAULT_COUNTDOWN_SECONDS);
-            setExpanded(false);
-            setDeferredUntilNavigation(false);
-            return nextManifest;
-          });
-        } else if (nextMode === 'completed') {
-          setMode('completed');
-          setManifest(nextManifest);
-          setCountdown(DEFAULT_COUNTDOWN_SECONDS);
-          setDeferredUntilNavigation(false);
-        } else {
-          setManifest(null);
-          setExpanded(false);
-          setDeferredUntilNavigation(false);
-        }
+        const nextManifest = await fetchAppVersionManifest();
+        if (!disposed) setManifest(nextManifest);
       } catch (error) {
-        if ((error as Error)?.name !== 'AbortError') {
-          console.warn('App version check failed', error);
-        }
+        console.warn('App version check failed', error);
       }
     };
 
-    const initialTimer = window.setTimeout(() => {
-      void checkVersion();
-    }, completedVersionRef.current ? 0 : INITIAL_CHECK_DELAY_MS);
+    const initialTimer = window.setTimeout(checkVersion,
+      readAcknowledgedAppVersion(accountId) === CURRENT_APP_VERSION ? INITIAL_CHECK_DELAY_MS : 0);
     const interval = window.setInterval(() => {
       if (document.visibilityState === 'visible') void checkVersion();
     }, POLL_INTERVAL_MS);
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') void checkVersion();
     };
-
     window.addEventListener('focus', checkVersion);
+    window.addEventListener('online', checkVersion);
     document.addEventListener('visibilitychange', handleVisibilityChange);
-
     return () => {
       disposed = true;
-      controller?.abort();
       window.clearTimeout(initialTimer);
       window.clearInterval(interval);
       window.removeEventListener('focus', checkVersion);
+      window.removeEventListener('online', checkVersion);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, []);
+  }, [accountId]);
 
   const refreshApp = useCallback(async (force = false) => {
-    if (!manifest || refreshStartedRef.current) return;
+    if (!manifest || !available || refreshStartedRef.current) return;
     refreshStartedRef.current = true;
     setRefreshing(true);
 
@@ -136,41 +98,22 @@ const AppVersionUpdateBanner: React.FC = () => {
       setRefreshing(false);
       message.error((error as Error)?.message || 'بروزرسانی ناموفق بود.');
     }
-  }, [manifest, message]);
+  }, [available, manifest, message]);
 
   useEffect(() => {
-    if (!manifest || mode !== 'available' || deferredUntilNavigation || refreshing) return undefined;
-    const timer = window.setInterval(() => {
-      setCountdown((prev) => Math.max(0, prev - 1));
-    }, 1000);
-    return () => window.clearInterval(timer);
-  }, [deferredUntilNavigation, manifest, mode, refreshing]);
-
-  useEffect(() => {
-    if (!manifest || mode !== 'available' || deferredUntilNavigation || refreshing || countdown > 0) return;
+    const previous = previousPathRef.current;
+    previousPathRef.current = pathname;
+    if (!manifest || !available || refreshing || previous === pathname || navigator.onLine === false) return;
     if (hasReachedRefreshAttemptLimit(manifest.version)) return;
     void refreshApp(false);
-  }, [countdown, deferredUntilNavigation, manifest, mode, refreshApp, refreshing]);
+  }, [pathname, available, manifest, refreshApp, refreshing]);
 
-  useEffect(() => {
-    const previous = previousLocationSignatureRef.current;
-    previousLocationSignatureRef.current = locationSignature;
-    if (!manifest || mode !== 'available' || refreshing || previous === locationSignature) return;
-    if (hasReachedRefreshAttemptLimit(manifest.version)) return;
-    void refreshApp(false);
-  }, [locationSignature, manifest, mode, refreshApp, refreshing]);
-
-  if (!manifest) return null;
-
-  const countdownPercent = Math.max(0, Math.min(100, (countdown / DEFAULT_COUNTDOWN_SECONDS) * 100));
-  const autoRefreshDisabled = hasReachedRefreshAttemptLimit(manifest.version);
+  if (!manifest || !mode || !displayedRelease) return null;
   const statusText = mode === 'completed'
-    ? 'نسخه جدید با موفقیت بارگذاری شد. می‌توانید تغییرات این نسخه و نسخه‌های قبل را مرور کنید.'
-    : deferredUntilNavigation
-    ? 'در اولین جابجایی صفحه، بروزرسانی انجام می‌شود.'
-    : autoRefreshDisabled
-      ? 'بروزرسانی خودکار موقتا متوقف شد. می‌توانید دستی بروزرسانی کنید.'
-      : `در حال بروزرسانی تا ${countdown} ثانیه دیگر`;
+    ? 'نسخهٔ جدید فعال است.'
+    : hasReachedRefreshAttemptLimit(manifest.version)
+      ? 'می‌توانید به‌روزرسانی را دستی انجام دهید.'
+      : 'به‌روزرسانی با انتخاب شما یا در جابه‌جایی بعدی انجام می‌شود.';
 
   return (
     <div className="app-version-update-banner sticky top-16 z-[980] border-b border-gray-200 bg-white/92 px-3 py-2 shadow-sm backdrop-blur-xl dark:border-dark-border dark:bg-dark-surface/92 md:px-4">
@@ -183,7 +126,7 @@ const AppVersionUpdateBanner: React.FC = () => {
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-xs font-black text-gray-800 dark:text-gray-100 md:text-sm">
                 {mode === 'completed'
-                  ? `بروزرسانی به نسخه ${manifest.version} انجام شد.`
+                  ? `به‌روزرسانی به نسخهٔ ${displayedRelease.version} انجام شد.`
                   : `نسخه ${manifest.version} منتشر شد.`}
               </span>
               <Tag className="m-0 rounded-lg px-2 py-0 text-[10px] font-bold" color="processing">
@@ -198,15 +141,10 @@ const AppVersionUpdateBanner: React.FC = () => {
             <div className="mt-1 text-[11px] font-semibold text-gray-500 dark:text-gray-300 md:text-xs">
               {statusText}
             </div>
-            {mode === 'available' && !deferredUntilNavigation && !autoRefreshDisabled && (
-              <Progress
-                percent={countdownPercent}
-                showInfo={false}
-                size="small"
-                strokeColor="rgb(var(--brand-500-rgb))"
-                trailColor="rgba(148, 163, 184, 0.22)"
-                className="mt-1 max-w-[360px]"
-              />
+            {installedRelease && !expanded && installedRelease.changes.length > 0 && (
+              <ul className="mt-1 list-disc ps-4 text-xs leading-relaxed text-gray-600 dark:text-gray-200">
+                {installedRelease.changes.map((change, index) => <li key={index}>{change}</li>)}
+              </ul>
             )}
           </div>
         </div>
@@ -222,20 +160,7 @@ const AppVersionUpdateBanner: React.FC = () => {
                 onClick={() => void refreshApp(true)}
                 className="!h-8 !rounded-xl !px-3 !text-xs !font-bold"
               >
-                الان بروزرسانی کن
-              </Button>
-              <Button
-                size="small"
-                type="text"
-                disabled={refreshing}
-                onClick={() => {
-                  setDeferredUntilNavigation(true);
-                  setCountdown(DEFAULT_COUNTDOWN_SECONDS);
-                  message.info('بروزرسانی در اولین جابجایی صفحه انجام می‌شود.');
-                }}
-                className="!h-8 !rounded-xl !px-3 !text-xs !font-bold !text-gray-600 dark:!text-gray-200"
-              >
-                بعدا
+                به‌روزرسانی
               </Button>
             </>
           ) : (
@@ -244,8 +169,9 @@ const AppVersionUpdateBanner: React.FC = () => {
               type="primary"
               icon={<CheckCircleOutlined />}
               onClick={() => {
-                completedVersionRef.current = null;
-                setManifest(null);
+                acknowledgeAppVersion(accountId, CURRENT_APP_VERSION);
+                setSeenVersion(CURRENT_APP_VERSION);
+                setExpanded(false);
               }}
               className="!h-8 !rounded-xl !px-3 !text-xs !font-bold"
             >

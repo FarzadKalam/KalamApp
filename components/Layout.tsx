@@ -1834,7 +1834,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           </div>
         </Header>
 
-        <AppVersionUpdateBanner />
+        {currentUser?.id ? <AppVersionUpdateBanner key={currentUser.id} accountId={currentUser.id} /> : null}
         <OrganizationAccessModal open={organizationModalOpen} onClose={() => setOrganizationModalOpen(false)} currentOrgId={resolvedOrgId} />
 
         {/* ── Trial countdown banner ── */}

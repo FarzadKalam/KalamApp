@@ -19,6 +19,7 @@ export const AI_AGENTS = {
   agent_task: { label: 'مهارت کار خودکار', description: 'آماده‌سازی کار زمان‌دار یا رویدادی با تأیید شما', activity: 'در حال آماده‌سازی کار خودکار' },
   organization_data: { label: 'مهارت اطلاعات سازمان', description: 'بررسی داده‌های واقعی در محدودهٔ دسترسی کاربر', activity: 'در حال بررسی اطلاعات واقعی سازمان' },
   organization_knowledge: { label: 'مهارت دانش سازمان', description: 'بازیابی دانش و دستورالعمل‌های مجاز سازمان', activity: 'در حال بررسی دانش سازمان' },
+  agent_instructions: { label: 'مهارت خواندن دستورهای ایجنت', description: 'بارگذاری تنظیمات و دستورهای ایجنت', activity: 'در حال خواندن دستورهای ایجنت' },
   customer_reply_suggestion: { label: 'مهارت پیشنهاد پاسخ مشتری', description: 'پیشنهاد پاسخ برای پیام‌های مشتریان', activity: 'در حال آماده‌سازی پاسخ مشتری' },
   customer_auto_reply: { label: 'مهارت پاسخ خودکار مشتری', description: 'پاسخ خودکار به مشتریان بر اساس تنظیمات سازمان', activity: 'در حال آماده‌سازی پاسخ مشتری' },
   voip_auto_reply: { label: 'مهارت پاسخ خودکار تماس', description: 'پاسخ صوتی خودکار به تماس‌ها', activity: 'در حال آماده‌سازی پاسخ تماس' },
@@ -42,6 +43,7 @@ export type AiActivityActionType =
   | 'routing'
   | 'read_data'
   | 'search_knowledge'
+  | 'read_instructions'
   | 'web_search'
   | 'analyze_document'
   | 'transcribe_voice'
@@ -79,6 +81,7 @@ export const AI_ACTIVITY_ACTION_BY_CAPABILITY: Record<AiAgentId, AiActivityActio
   agent_task: 'workflow_action',
   organization_data: 'read_data',
   organization_knowledge: 'search_knowledge',
+  agent_instructions: 'read_instructions',
   customer_reply_suggestion: 'customer_reply',
   customer_auto_reply: 'customer_reply',
   voip_auto_reply: 'customer_reply',
@@ -123,11 +126,21 @@ export function applyAiAgentActivity(current: AiAgentActivity[], event: AiAgentA
 }
 
 export type AiAgentActivityReporter = (event: AiAgentActivity) => void;
+export const createAiActivityTracker = (initial: AiAgentActivity[] = [], publish?: AiAgentActivityReporter) => {
+  let activities = initial;
+  return {
+    get activities() { return activities; },
+    report: (event: AiAgentActivity) => {
+      activities = applyAiAgentActivity(activities, event);
+      publish?.(event);
+    },
+  };
+};
 export async function withAiAgentActivity<T>(
   agentId: AiAgentId,
   work: () => Promise<T>,
   report?: AiAgentActivityReporter,
-  options?: { actionType?: AiActivityActionType; detail?: string },
+  options?: { actionType?: AiActivityActionType; detail?: string; isFailed?: (result: T) => boolean },
 ): Promise<T> {
   const actionType = options?.actionType || AI_ACTIVITY_ACTION_BY_CAPABILITY[agentId];
   const detail = options?.detail;
@@ -135,7 +148,7 @@ export async function withAiAgentActivity<T>(
   report?.({ ...step, phase: 'started', at: Date.now() });
   try {
     const result = await work();
-    report?.({ ...step, phase: 'completed', at: Date.now() });
+    report?.({ ...step, phase: options?.isFailed?.(result) ? 'failed' : 'completed', at: Date.now() });
     return result;
   } catch (error) {
     report?.({ ...step, phase: 'failed', at: Date.now() });

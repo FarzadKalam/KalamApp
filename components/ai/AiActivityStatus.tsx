@@ -39,6 +39,7 @@ type Props = {
   agentId?: string;
   activities?: AiAgentActivity[];
   streaming?: boolean;
+  pendingDetail?: string;
   onStop?: () => void;
 };
 
@@ -46,6 +47,7 @@ const ACTION_ICON_MAP: Record<AiActivityActionType, React.ReactNode> = {
   routing: <CompassOutlined />,
   read_data: <DatabaseOutlined />,
   search_knowledge: <BookOutlined />,
+  read_instructions: <BookOutlined />,
   web_search: <GlobalOutlined />,
   analyze_document: <FileSearchOutlined />,
   transcribe_voice: <AudioOutlined />,
@@ -68,6 +70,7 @@ const ACTION_LABEL_MAP: Record<AiActivityActionType, string> = {
   routing: 'بررسی و انتخاب مسیر مناسب',
   read_data: 'خواندن اطلاعات سازمان',
   search_knowledge: 'جستجو در دانش سازمان',
+  read_instructions: 'خواندن دستورهای ایجنت',
   web_search: 'جستجو در اینترنت',
   analyze_document: 'تحلیل فایل و سند پیوست',
   transcribe_voice: 'تبدیل گفتار به متن',
@@ -134,13 +137,13 @@ const buildThoughtChainItems = (items: AiAgentActivity[], streaming: boolean): T
     };
   });
 
-export default function AiActivityStatus({ agentId = 'text_chat', activities = [], streaming = true, onStop }: Props) {
+export default function AiActivityStatus({ agentId = 'text_chat', activities = [], streaming = true, pendingDetail, onStop }: Props) {
   const [expanded, setExpanded] = useState(false);
 
   const items: AiAgentActivity[] = activities.length
     ? activities
     : streaming
-      ? [{ agentId: (agentId as any) || 'text_chat', phase: 'started', at: Date.now() }]
+      ? [{ agentId: (agentId as any) || 'text_chat', phase: 'started', at: Date.now(), detail: pendingDetail }]
       : [];
 
   if (!items.length) return null;

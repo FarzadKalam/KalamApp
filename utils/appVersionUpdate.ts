@@ -23,6 +23,8 @@ const REFRESH_INTENT_KEY = 'tazesystem:app-update-refresh-intent:v1';
 const REFRESH_ATTEMPT_WINDOW_MS = 5 * 60 * 1000;
 const MAX_REFRESH_ATTEMPTS_PER_VERSION = 3;
 const MANIFEST_MEMORY_TTL_MS = 60_000;
+const RELEASE_SEEN_KEY = 'tazesystem:app-release-seen:v1:';
+const acknowledgedReleases = new Map<string, string>();
 
 let manifestRequestPromise: Promise<AppVersionManifest> | null = null;
 let latestManifestSnapshot: { value: AppVersionManifest; fetchedAt: number } | null = null;
@@ -58,12 +60,30 @@ export const compareAppVersions = (left: string, right: string) => {
 export const isNewerAppVersion = (remoteVersion: string, currentVersion = CURRENT_APP_VERSION) =>
   compareAppVersions(remoteVersion, currentVersion) > 0;
 
+export const readAcknowledgedAppVersion = (accountId: string) => {
+  if (acknowledgedReleases.has(accountId)) return acknowledgedReleases.get(accountId) || null;
+  try { return window.localStorage.getItem(RELEASE_SEEN_KEY + accountId); }
+  catch { return null; }
+};
+
+export const acknowledgeAppVersion = (accountId: string, version = CURRENT_APP_VERSION) => {
+  acknowledgedReleases.set(accountId, version);
+  try { window.localStorage.setItem(RELEASE_SEEN_KEY + accountId, version); }
+  catch { /* Acknowledgement remains valid for this page. */ }
+};
+
+export const getUnreadInstalledRelease = (
+  manifest: AppVersionManifest, currentVersion: string, seenVersion: string | null,
+) => {
+  if (seenVersion && compareAppVersions(seenVersion, currentVersion) >= 0) return null;
+  return manifest.releases.find(release => compareAppVersions(release.version, currentVersion) === 0) || null;
+};
+
 export const resolveAppVersionBannerMode = (
   remoteVersion: string,
   currentVersion: string,
   completedVersion?: string | null
 ): AppVersionBannerMode | null => {
-  if (isNewerAppVersion(remoteVersion, currentVersion)) return 'available';
   if (
     completedVersion
     && compareAppVersions(currentVersion, completedVersion) >= 0
@@ -71,7 +91,7 @@ export const resolveAppVersionBannerMode = (
   ) {
     return 'completed';
   }
-  return null;
+  return isNewerAppVersion(remoteVersion, currentVersion) ? 'available' : null;
 };
 
 const readRefreshIntent = (): RefreshIntent | null => {
@@ -172,7 +192,7 @@ export const validateAppVersionManifest = (value: unknown): AppVersionManifest |
   };
 };
 
-export const fetchAppVersionManifest = async (_signal?: AbortSignal) => {
+export const fetchAppVersionManifest = async () => {
   const now = Date.now();
   if (latestManifestSnapshot && now - latestManifestSnapshot.fetchedAt < MANIFEST_MEMORY_TTL_MS) {
     return latestManifestSnapshot.value;
@@ -208,15 +228,39 @@ export const fetchAppVersionManifest = async (_signal?: AbortSignal) => {
   }
 };
 
-const updateServiceWorkers = async () => {
+const updateServiceWorker = async () => {
   if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return;
-  const registrations = await navigator.serviceWorker.getRegistrations().catch(() => []);
-  await Promise.all(
-    registrations.map(async (registration) => {
-      await registration.update().catch(() => undefined);
+  const serviceWorkers = navigator.serviceWorker;
+  const registration = await serviceWorkers.getRegistration().catch(() => undefined);
+  if (!registration) return;
+  await new Promise<void>(resolve => {
+    let worker: ServiceWorker | null = null;
+    const finish = () => {
+      window.clearTimeout(timeout);
+      serviceWorkers.removeEventListener('controllerchange', finish);
+      registration.removeEventListener('updatefound', watch);
+      worker?.removeEventListener('statechange', activate);
+      resolve();
+    };
+    const activate = () => {
       registration.waiting?.postMessage({ type: 'SKIP_WAITING' });
-    })
-  );
+    };
+    const watch = () => {
+      worker?.removeEventListener('statechange', activate);
+      worker = registration.installing;
+      worker?.addEventListener('statechange', activate);
+      activate();
+    };
+    const timeout = window.setTimeout(finish, 4000);
+    serviceWorkers.addEventListener('controllerchange', finish);
+    registration.addEventListener('updatefound', watch);
+    watch();
+    if (!registration.waiting && !registration.installing) {
+      void registration.update().then(() => {
+        if (!registration.waiting && !registration.installing) finish();
+      }).catch(finish);
+    }
+  });
 };
 
 export const prepareAppRefresh = async (targetVersion: string, options?: { force?: boolean }) => {
@@ -230,5 +274,5 @@ export const prepareAppRefresh = async (targetVersion: string, options?: { force
   }
 
   recordRefreshIntent(version);
-  await updateServiceWorkers();
+  await updateServiceWorker();
 };

@@ -163,7 +163,7 @@ const putInCache = async (cacheName, request, response, maxEntries) => {
   return response;
 };
 
-const matchShell = () => caches.match('/index.html', { ignoreSearch: true });
+const matchShell = async () => (await caches.open(SHELL_CACHE)).match('/index.html', { ignoreSearch: true });
 
 const isStaticAssetRequest = (requestUrl, request) => {
   if ([VERSION_MANIFEST_PATH, RUNTIME_CONFIG_PATH, CENTRAL_RELEASE_PATH].includes(requestUrl.pathname)) return false;
@@ -188,7 +188,7 @@ const handleNavigationRequest = async (event) => {
     void putInCache(PAGE_CACHE, event.request, networkResponse.clone(), MAX_PAGE_ENTRIES);
     return networkResponse;
   } catch {
-    const cachedPage = await caches.match(event.request, { ignoreSearch: true });
+    const cachedPage = await (await caches.open(PAGE_CACHE)).match(event.request, { ignoreSearch: true });
     if (cachedPage) return cachedPage;
     const shell = await matchShell();
     if (shell) return shell;
@@ -198,7 +198,9 @@ const handleNavigationRequest = async (event) => {
 
 const handleStaticAssetRequest = async (request) => {
   const requestUrl = new URL(request.url);
-  const cached = await caches.match(request, { ignoreSearch: false });
+  const cached = isImmutableBuildAssetRequest(requestUrl)
+    ? await caches.match(request, { ignoreSearch: false })
+    : await (await caches.open(ASSET_CACHE)).match(request, { ignoreSearch: false });
 
   if (cached && isImmutableBuildAssetRequest(requestUrl)) {
     return cached;
@@ -240,7 +242,7 @@ const handleDataRequest = async (request) => {
     void putInCache(DATA_CACHE, request, networkResponse.clone(), MAX_DATA_ENTRIES);
     return networkResponse;
   } catch {
-    const cached = await caches.match(request, { ignoreSearch: false });
+    const cached = await (await caches.open(DATA_CACHE)).match(request, { ignoreSearch: false });
     if (cached) return cached;
     return buildUnavailableJsonResponse('network_unavailable');
   }
@@ -269,14 +271,16 @@ self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(SHELL_CACHE).then((cache) => cache.addAll(APP_SHELL)).catch(() => undefined)
   );
-  self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     (async () => {
       const keys = await caches.keys();
-      await Promise.all(keys.filter((key) => !ALL_CACHES.includes(key)).map((key) => caches.delete(key)));
+      // A different tab may still be using hashed modules from the preceding build.
+      const previousAssets = keys.filter(key => key.startsWith('tazesystem-assets-') && key !== ASSET_CACHE).at(-1);
+      await Promise.all(keys.filter(key => /^tazesystem-(shell|pages|assets|data)-/.test(key)
+        && !ALL_CACHES.includes(key) && key !== previousAssets).map(key => caches.delete(key)));
 
       if ('navigationPreload' in self.registration) {
         await self.registration.navigationPreload.enable();
@@ -289,7 +293,7 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('message', (event) => {
   if (event.data?.type === 'SKIP_WAITING') {
-    self.skipWaiting();
+    event.waitUntil(self.skipWaiting());
   }
 });
 
