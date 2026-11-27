@@ -460,6 +460,7 @@ jobs:
           npx vitest run utils/contentCalendarMovement.test.ts utils/contentCalendarPresentation.test.ts
           utils/contentCalendarCopy.test.ts components/contentCalendars/CalendarDayEvents.test.tsx
           components/contentCalendars/ContentCalendarRuntime.test.tsx pages/OnlineContentCalendarPublicPage.test.tsx
+          utils/aiUploadedFilePrompt.test.ts supabase/functions/_shared/ai-content-calendar.test.ts
           --maxWorkers=1 --no-file-parallelism
 
       - name: Module list regression checks

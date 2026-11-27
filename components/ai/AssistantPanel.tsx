@@ -2422,6 +2422,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     } finally {
       setSubmitting(false);
     }
+    return undefined;
   }, [activeRecordCreationSchema, applyThreadTitleFromResponse, callAssistant, callAssistantStream, contextWithSelection, effectiveAgents, executeAutoRoute, input, message, pendingAiAction, processOperationMode, requestAutoRoute, selectedCapabilities, submitting, threadId]);
 
   useEffect(() => {
