@@ -34,6 +34,7 @@ export type AiAgentDefinition = {
   supportsBackground: boolean;
   supportsStaffBot: boolean;
   requiredPlanFeatures?: string[];
+  requiredAnyPlanFeatures?: string[];
   defaultBackgroundConfig: {
     enabled: boolean;
     interval_minutes: number;
@@ -410,6 +411,7 @@ export const AI_AGENT_CATALOG: readonly AiAgentDefinition[] = [
     badgeColor: '#e1306c',
     iconKey: 'instagram',
     primaryModules: ['instagram_conversations', 'content_calendars'],
+    requiredAnyPlanFeatures: ['instagram_inbox', 'content_calendar'],
     optionalModules: ['campaigns', 'workflows', 'customers', 'products', 'price_lists', 'product_bundles', 'marketing_leads'],
     defaultCapabilities: ['record_creation', 'process_operation', 'customer_reply_suggestion'],
     defaultToneStyle: 'friendly_warm',

@@ -36,6 +36,7 @@ export type AiAgentDefinition = {
   supportsBackground: boolean;
   supportsStaffBot: boolean;
   requiredPlanFeatures?: string[];
+  requiredAnyPlanFeatures?: string[];
   defaultBackgroundConfig: {
     enabled: boolean;
     interval_minutes: number;
@@ -419,6 +420,7 @@ export const AI_AGENT_CATALOG: readonly AiAgentDefinition[] = [
     badgeColor: '#e1306c',
     iconKey: 'instagram',
     primaryModules: ['instagram_conversations', 'content_calendars'],
+    requiredAnyPlanFeatures: ['instagram_inbox', 'content_calendar'],
     optionalModules: ['campaigns', 'workflows', 'customers', 'products', 'price_lists', 'product_bundles', 'marketing_leads'],
     defaultCapabilities: ['record_creation', 'process_operation', 'customer_reply_suggestion'],
     defaultToneStyle: 'friendly_warm',
@@ -834,9 +836,9 @@ export const deriveLegacyEnabledAiAgentFeatureKeys = (
         return false;
       });
       const requiredFeatures = Array.isArray(def.requiredPlanFeatures) ? def.requiredPlanFeatures : [];
-      const featuresOk = requiredFeatures.every((feature) =>
-        isPlanFeatureAllowedClient(featMap, feature, { missingReturnsFalse: hasFeatureList }),
-      );
+      const featureAllowed = (feature: string) => isPlanFeatureAllowedClient(featMap, feature, { missingReturnsFalse: hasFeatureList });
+      const featuresOk = requiredFeatures.every(featureAllowed)
+        && (!def.requiredAnyPlanFeatures?.length || def.requiredAnyPlanFeatures.some(featureAllowed));
       return moduleOk && featuresOk;
     })
     .map((def) => getAiAgentPlanFeatureKey(def.key));
@@ -905,12 +907,13 @@ export const resolveClientAgentAccess = (params: {
 
     const planModulesAvailable = def.primaryModules.filter((m) => isPlanModEnabled(m)).length > 0;
     const requiredFeatures = Array.isArray(def.requiredPlanFeatures) ? def.requiredPlanFeatures : [];
+    const featureAllowed = (feature: string) =>
+      isPlanFeatureAllowedClient(params.planFeatures, feature, { missingReturnsFalse: hasFeatureMapKeys });
     const agentFlagAllowed = isAgentPlanFlagAllowedClient(params.planFeatures, def.key);
     const planAllowed = agentFlagAllowed
       && planModulesAvailable
-      && requiredFeatures.every((feature) =>
-        isPlanFeatureAllowedClient(params.planFeatures, feature, { missingReturnsFalse: hasFeatureMapKeys }),
-      );
+      && requiredFeatures.every(featureAllowed)
+      && (!def.requiredAnyPlanFeatures?.length || def.requiredAnyPlanFeatures.some(featureAllowed));
 
     const hasUsableRbac = def.key === 'lead_orchestrator'
       ? true

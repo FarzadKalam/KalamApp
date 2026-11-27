@@ -275,7 +275,7 @@ describe('Modular AaaS Foundation', () => {
   });
 
   it.each(['demo', 'internal_organization'])('shows permitted agents to verified admins with sparse role permissions (%s)', (reason) => {
-    const enabledModules = { customers: true, marketing_leads: true, invoices: true, campaigns: false, tasks: true, projects: true };
+    const enabledModules = { customers: true, marketing_leads: true, invoices: true, advertising_campaigns: false, tasks: true, projects: true };
     const features = { 'ai_agent:lead_orchestrator': true, 'ai_agent:sales_leads': true, 'ai_agent:project_process': true, 'ai_agent:hr_manager': false };
     const permissions = reason === 'demo' ? {} : { __saas_admin: { view: true, edit: true } };
     const planContext = { reason, available: true, strictModules: true, enabledModules, features };
@@ -294,7 +294,7 @@ describe('Modular AaaS Foundation', () => {
       expect(access.sales_leads.canView).toBe(false);
     }
     for (const access of check({ softwareRole: 'admin', permissions: {
-      ...permissions, customers: { view: false }, invoices: { view: false }, marketing_leads: { view: false }, campaigns: { view: false },
+      ...permissions, customers: { view: false }, invoices: { view: false }, marketing_leads: { view: false }, advertising_campaigns: { view: false },
       __ai_agents: { edit: true, fields: { 'project_process.chat': false, 'project_process.toggle': false, 'project_process.edit': false } },
     } })) {
       expect(access.sales_leads.canView).toBe(false);

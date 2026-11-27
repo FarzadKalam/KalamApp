@@ -118,7 +118,9 @@ export const isAgentPlanAllowed = (planContext: any, agentDef: AiAgentDefinition
 
   const missingPlanModules = agentDef.primaryModules.filter((mod) => !isPlanModuleEnabled(planContext, mod));
   const requiredFeatures = Array.isArray(agentDef.requiredPlanFeatures) ? agentDef.requiredPlanFeatures : [];
-  const featuresAllowed = requiredFeatures.every((featureKey) => isPlanFeatureEnabled(planContext, featureKey));
+  const featureAllowed = (featureKey: string) => isPlanFeatureEnabled(planContext, featureKey);
+  const featuresAllowed = requiredFeatures.every(featureAllowed)
+    && (!agentDef.requiredAnyPlanFeatures?.length || agentDef.requiredAnyPlanFeatures.some(featureAllowed));
   return featuresAllowed && missingPlanModules.length < agentDef.primaryModules.length;
 };
 

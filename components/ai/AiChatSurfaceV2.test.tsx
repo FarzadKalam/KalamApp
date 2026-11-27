@@ -212,7 +212,7 @@ describe('AiChatSurfaceV2', () => {
     await waitFor(() => expect(within(screen.getByTestId('ai-conversation-header')).queryByText('گفتگوی واقعی فروش')).not.toBeInTheDocument());
   },15000);
 
-  it('shows observed parallel agent activity before metadata and clears it after the final answer', async () => {
+  it('keeps parallel agent activity during the response and makes it expandable after the answer', async () => {
     let controller!: ReadableStreamDefaultController<Uint8Array>;
     const encoder=new TextEncoder();
     fetchMock.mockResolvedValueOnce(new Response(new ReadableStream<Uint8Array>({start(value){controller=value;}}),{headers:{'Content-Type':'text/event-stream'}}));
@@ -226,11 +226,14 @@ describe('AiChatSurfaceV2', () => {
     expect(await screen.findByText('در حال بررسی اطلاعات واقعی سازمان…')).toBeInTheDocument();
     expect(await screen.findByText('در حال بررسی دانش سازمان…')).toBeInTheDocument();
     await send('agent_activity',{agentId:'organization_data',phase:'completed',at:3});
-    await waitFor(()=>expect(screen.queryByText('در حال بررسی اطلاعات واقعی سازمان…')).not.toBeInTheDocument());
+    expect(screen.getByText('در حال بررسی اطلاعات واقعی سازمان…')).toBeInTheDocument();
     expect(screen.getByText('در حال بررسی دانش سازمان…')).toBeInTheDocument();
     await send('done',{success:true,threadId:'new-thread',messageId:'answer-1',answer:'گزارش آماده است'});
     expect(await screen.findByText('گزارش آماده است')).toBeInTheDocument();
     expect(screen.queryByText('در حال بررسی دانش سازمان…')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /سوابق پردازش/ }));
+    expect(screen.getByText('در حال بررسی اطلاعات واقعی سازمان…')).toBeInTheDocument();
+    expect(screen.getByText('در حال بررسی دانش سازمان…')).toBeInTheDocument();
   },15000);
 
   it('does not auto-submit when a dashboard file is only queued for the new conversation', async () => {
