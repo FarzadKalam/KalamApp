@@ -2,6 +2,12 @@
 
 ### صفحهٔ جامع راهکارها (`/solutions`)، ۸ صفحهٔ راهکار جدید و غیرفعال‌سازی سکشن شبانه‌روزی (`3.32.0`) — ۲۰۲۶-۱۱-۲۸
 
+- **وضعیت فعلی استقرار:**
+  - کامیت `a1131cad` با [CI-CD Run #46072549131](https://github.com/FarzadKalam/KalamApp/actions/runs/46072549131) روی گیت‌هاب با موفقیت کامل ساخته و تست شد (`completed / success`).
+  - **تابع Edge `sitemap` مستقر شد:** بررسی زندهٔ `https://tazesystem.ir/sitemap.xml` حضور `/solutions` و هر ۱۲ مسیر `/solutions/*` و `<lastmod>2026-11-27</lastmod>` برای `report-builder-for-better-decisions` را تأیید کرد.
+  - **مقالهٔ بازنویسی‌شدهٔ گزارش‌ساز در CMS منتشر شد:** رکورد `report-builder-for-better-decisions` در `public.cms_blog_posts` با ۳۳ بلوک، ۴ مثال واقعی و ۳ تصویر به‌روزرسانی گردید (`UPDATE 1`).
+  - **بررسی سرور زیردامنهٔ مشتری `mehrbanoo.tazesystem.ir`:** بررسی DNS نشان داد این زیردامنه به آی‌پی مستقل `212.23.201.161` (سرور جدا از `194.5.175.192`) اشاره می‌کند و به آن سرور دسترسی deploy نداریم؛ روی سرور اصلی `194.5.175.192`، Nginx برای `tazesystem.ir` و `*.tazesystem.ir` به‌درستی `X-Robots-Tag` و `try_files $tazesystem_seo_prefix$uri.html` را دارد.
+  - **فرانت‌اند `3.32.0` هنوز روی دامنهٔ واقعی فعال نشده است:** بیلد محلی ویندوز با خطای حافظهٔ مجازی (`VirtualAlloc errno=1455` در esbuild) متوقف شد و برای فعال‌سازی از طریق گیت‌هاب، `gh` CLI یا توکن دسترسی در محیط محلی نصب نیست.
 - **تغییرات عمومی و سئو (تجمیع‌شده در نسخهٔ `3.32.0`):**
   - کاتالوگ مشترک ۱۲ راهکار در `shared/publicSolutions.mjs` و صفحهٔ فهرست `/solutions` در `pages/PublicSite.tsx` (همراه با لینک در منوی بالای سایت، فوتر و بخش `SolutionsOverview`) ایجاد شد.
   - ۸ صفحهٔ راهکار جدید شامل `/solutions/report-builder` (سیستم گزارش‌ساز و داشبورد مدیریتی)، `/solutions/process-automation`، `/solutions/accounting-moadian`، `/solutions/hr-kpi-commission`، `/solutions/project-management`، `/solutions/voip-call-center`، `/solutions/messaging-bots` و `/solutions/mcp-ai-connectors` در کاتالوگ مشترک، `shared/publicSiteSeo.mjs`، `scripts/generate-public-seo.mjs` (با `FAQPage` JSON-LD و لینک‌های مرتبط)، `public/llms.txt` و `supabase/functions/sitemap/index.ts` اضافه شدند.
