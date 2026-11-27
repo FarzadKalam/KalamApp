@@ -2865,7 +2865,6 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           messageText: assistantPrompt,
           inputKind: 'task_bundle',
           bundlePayload: inputs,
-          userMessageText: interruptedText ? prompt : undefined,
         })
         : null;
       const recordMutationMode = pendingAiAction?.actionType === 'update_record_from_prompt'
@@ -2885,6 +2884,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           messageText: assistantPrompt,
           inputKind: 'task_bundle',
           bundlePayload: inputs,
+          userMessageText: interruptedText ? prompt : undefined,
         })
         : callAssistant({
           action: 'run_task_bundle',
