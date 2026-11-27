@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { appendStreamToolCalls, buildAgentToolResultFallback, executeAgentToolCalls, type AgentToolCall } from './ai-tool-calls';
-import { describeAiAttachments, describeAiToolActivity, describeModuleRead } from './ai-activity-details';
+import { describeAiAgentCollaboration, describeAiAttachments, describeAiSkillOwners, describeAiToolActivity, describeModuleRead } from './ai-activity-details';
 const tools = [{ type: 'function', function: { name: 'read_organization_data' } }];
 const call = (): AgentToolCall => ({ id: 'call-1', type: 'function', function: { name: 'read_organization_data', arguments: '{"moduleId":"marketing_leads"}' } });
 describe('shared model tool calls', () => {
@@ -28,6 +28,13 @@ describe('shared model tool calls', () => {
   it('rejects an undeclared write tool instead of letting the model invent one', async () => {
     const execute = vi.fn(); const bad = call(); bad.function.name = 'execute_sql';
     await expect(executeAgentToolCalls([bad], tools, execute)).rejects.toThrow(); expect(execute).not.toHaveBeenCalled();
+  });
+  it('names every participating agent and never displays unknown skill owners', () => {
+    const names = ['ایجنت فروش', 'ایجنت پروژه', 'ایجنت تقویم'];
+    expect(describeAiAgentCollaboration(names)).toBe('در حال هماهنگی ایجنت فروش با ایجنت پروژه و ایجنت تقویم');
+    expect(describeAiAgentCollaboration([names[0]])).toBeNull();
+    expect(describeAiSkillOwners({ skillIds: ['a','b'] }, id => ({ a: names[0], b: names[1] })[id])).toBe('در حال خواندن دستورهای تخصصی ایجنت فروش و ایجنت پروژه');
+    expect(describeAiSkillOwners({ skillIds: ['a','private'] }, id => id === 'a' ? names[0] : undefined)).toBeNull();
   });
   it('returns rejected reads to the model for correction without leaking transport secrets', async () => {
     const result = await executeAgentToolCalls([call()], tools, vi.fn().mockRejectedValue(new Error('secret-token')));

@@ -617,6 +617,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   const [recordCreationTargetModuleId, setRecordCreationTargetModuleId] = useState<string | null>(null);
   const [processOperationMode, setProcessOperationMode] = useState(false);
   const [pendingAiAction, setPendingAiAction] = useState<any | null>(null);
+  const [animatedReceiptId, setAnimatedReceiptId] = useState<string | null>(null);
   const [confirmingAiAction, setConfirmingAiAction] = useState(false);
   const [rememberGenerationPreference, setRememberGenerationPreference] = useState(false);
   const [skipGenerationConfirmationByKind, setSkipGenerationConfirmationByKind] = useState<Record<string, boolean>>({});
@@ -3078,8 +3079,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         operationEdits: pendingAiAction?.operationEdits,
       });
       const executedRecords = [
-        ...(Array.isArray(data?.createdRecords) ? data.createdRecords : []),
-        ...(Array.isArray(data?.updatedRecords) ? data.updatedRecords : []),
+        ...(data?.createdRecords || data?.created_records || []),
+        ...(data?.updatedRecords || data?.updated_records || []),
       ];
       const executedOperationCount = Array.isArray(data?.operations) ? data.operations.length : 0;
       const updatedCalendars = new Set<string>((Array.isArray(data?.operations) ? data.operations : [])
@@ -3095,6 +3096,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       ) {
         throw new Error('ثبت یا ویرایش رکورد نتیجه قابل تایید نداشت.');
       }
+      if (executedRecords.length) setAnimatedReceiptId(actionId);
       message.success(
         executedOperationCount > 0
           ? `${executedOperationCount.toLocaleString('fa-IR')} اقدام با موفقیت اجرا شد.`
@@ -3354,7 +3356,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
                 onRetry={retryText ? () => void submitChat(retryText, 'text') : undefined}
               />
             )}
-            {!isUser ? <AiRecordResultCard metadata={item.metadata} /> : null}
+            {!isUser ? <AiRecordResultCard metadata={item.metadata} animate={!!animatedReceiptId && item.metadata?.action_log_id === animatedReceiptId} /> : null}
             <MessageAttachmentGallery attachments={attachments} presentation={isUser ? undefined : 'assistant'} />
             {questions.length > 0 ? (
               <AiQuestionCard questions={questions} form={clarificationForm}
@@ -3613,6 +3615,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       </div>
     );
   }, [
+    animatedReceiptId,
     contextWithSelection.mode,
     contextWithSelection.moduleId,
     contextWithSelection.recordId,

@@ -99,6 +99,7 @@ export const createAgentSkillRuntime = (ctx: SkillExecutionContext) => {
   };
   return {
     systemMessage: `${instructions}\n${catalog}`,
+    getSkillOwner: (id: string) => allowed.get(id)?.agentKey,
     tool: { type: 'function', function: { name: 'read_agent_skills',
       description: 'خواندن دستور کامل مهارت‌های مرتبط از فهرست مجاز؛ انتخاب با مدل است.',
       parameters: { type: 'object', properties: {

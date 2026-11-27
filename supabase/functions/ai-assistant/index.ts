@@ -145,7 +145,7 @@ import { resolvePersianCalendarContext } from '../_shared/persian-calendar-resol
 import { PEYDA_REGULAR_WOFF2_BASE64 } from './peyda-font.ts';
 import { GEMINI_PREBUILT_VOICES, resolveSpeechModelProvider } from '../_shared/speech-model-provider.ts';
 import { createAiActivityTracker, getAiAgentLabel, resolveAiAgentId, withAiAgentActivity, type AiAgentActivityReporter } from '../_shared/ai-agents.ts';
-import { describeAiAttachments, describeAiToolActivity, describeModuleRead } from '../_shared/ai-activity-details.ts';
+import { describeAiAgentCollaboration, describeAiAttachments, describeAiSkillOwners, describeAiToolActivity, describeModuleRead } from '../_shared/ai-activity-details.ts';
 import {
   estimateAiChargeCore,
   extractAvalaiTransactionCostCore,
@@ -2048,6 +2048,7 @@ const buildAgentDataToolRuntime = async (supabaseUrl: string, serviceRoleKey: st
       return actions.length === 1 ? actions[0] : { id: actions[0].id, actionType: 'agent_task_batch', summaryFa: 'بررسی کارهای خودکار', actions };
     },
     access,
+    getSkillOwner: skills?.getSkillOwner,
     completedDataModules,
     systemMessage: { role: 'system', content: 'ماژول و فیلد واقعی را با describe_organization_data کشف کن. همه ماژول‌های اعلام‌شده در محدودهٔ مجاز قابل جست‌وجو هستند. filters شرط‌های هم‌زمان AND و anyFilters گزینه‌های OR در کنار همان شرط‌ها هستند. نام یا کد، وضعیت، شخص و تاریخ را ترکیب کن. ستون و صفحهٔ کوچک بخوان. ادامه را با nextAfterId یا nextOffset بگیر. خطای خواندن یا صفحهٔ ناقص را نبود داده یا نتیجهٔ کل معرفی نکن. شناسهٔ خام نشان نده. برای متن و JSON و تغییرات هر رکورد از read_process_context با section=field یا history استفاده کن.'
       + (skills ? '\n\n' + skills.systemMessage : '')
@@ -2859,7 +2860,7 @@ const getAiModuleActivityLabel = (moduleId: string) =>
   Object.hasOwn(AI_RECORD_SCHEMAS, moduleId) ? AI_RECORD_SCHEMAS[moduleId].moduleLabel : undefined;
 
 const createAiToolActivityObserver = (
-  report: AiAgentActivityReporter, allowedModuleIds: string[],
+  report: AiAgentActivityReporter, allowedModuleIds: string[], getSkillOwner?: (id: string) => AgentKey | undefined,
 ): AgentToolBatchObserver => {
   const allowed = new Set(allowedModuleIds);
   const previousTargets = new Set<string>();
@@ -2872,7 +2873,15 @@ const createAiToolActivityObserver = (
     const continuing = targets.every(target => previousTargets.has(target)) || calls.every(call => Boolean(call.args.afterId || call.args.offset));
     const description = dataRead
       ? targets.length ? describeModuleRead(targets, label, continuing ? 'continuation' : undefined) : null
-      : describeAiToolActivity(first.name, first.args, label);
+      : first.name === 'read_agent_skills' && getSkillOwner
+        ? (() => {
+          const detail = describeAiSkillOwners(first.args, id => {
+            const agent = getSkillOwner(id);
+            return agent ? getAgentDefinition(agent).titleFa : undefined;
+          });
+          return detail ? { agentId: 'agent_instructions' as const, detail } : null;
+        })()
+        : describeAiToolActivity(first.name, first.args, label);
     if (dataRead) targets.forEach(target => previousTargets.add(target));
     return description ? withAiAgentActivity(description.agentId, run, report, {
       ...description,
@@ -8337,7 +8346,7 @@ const prepareChatRequest = async (
       personal_memory: (userMemories || []).map((m: any) => normalizeAiUserMemoryContent(m?.content)).filter(Boolean),
     };
 
-    let compiled = await compileLayeredAgentPrompt({
+    const compile = () => compileLayeredAgentPrompt({
       userMessage: message,
       selectedAgents,
       selectedCapabilities: mergedCapabilities,
@@ -8351,6 +8360,10 @@ const prepareChatRequest = async (
       legacySystemPrompt: legacySystemContent,
       currentSystemInstruction: dataToolRuntime?.systemMessage.content,
     });
+    const coordination = describeAiAgentCollaboration(selectedAgents.map(agent => getAgentDefinition(agent).titleFa));
+    const compiled = coordination
+      ? await withAiAgentActivity('auto_decision', compile, reportActivity, { detail: coordination })
+      : await compile();
 
     promptMessages = compiled.messages;
     cachedPrefixHash = compiled.cachedPrefixHash;
@@ -8362,7 +8375,7 @@ const prepareChatRequest = async (
     body,
     toolExecutor: dataToolRuntime?.execute,
     observeTools: reportActivity && dataToolRuntime
-      ? createAiToolActivityObserver(reportActivity, dataToolRuntime.access.modules.map(module => module.id)) : undefined,
+      ? createAiToolActivityObserver(reportActivity, dataToolRuntime.access.modules.map(module => module.id), dataToolRuntime.getSkillOwner) : undefined,
     persistTaskProposal: dataToolRuntime?.persistTaskProposal,
     selectedCapabilities: mergedCapabilities,
     explicitCapabilities: selectedCapabilities,
@@ -9383,7 +9396,7 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
   let promptMessages = legacyPromptMessages;
   let cachedPrefixHash: string | null = null;
   if (!freeChatMode) {
-    const compiled = await compileLayeredAgentPrompt({
+    const compile = () => compileLayeredAgentPrompt({
       userMessage: prompt,
       selectedAgents,
       selectedCapabilities: mergedCapabilities,
@@ -9409,6 +9422,10 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
         'وقتی برای اجرای عملیاتی حساس (مثل `apply_price_adjustment`، `create_instagram_workflow_rule`، `create_instagram_showcase`، `create_process_template` یا `settle_invoice_payment`) اطلاعات تصویر/فایل کامل و آماده تأیید بود، علاوه بر توضیح فارسی، بلوک JSON `{ "proposed_action": { "action_type": "...", "summary_fa": "...", "module_id": "...", "record_id": "...", "payload": {...} } }` را برگردان.',
       ].filter(Boolean).join('\n\n'),
     });
+    const coordination = describeAiAgentCollaboration(selectedAgents.map(agent => getAgentDefinition(agent).titleFa));
+    const compiled = coordination
+      ? await withAiAgentActivity('auto_decision', compile, activityTracker.report, { detail: coordination })
+      : await compile();
     promptMessages = compiled.messages;
     cachedPrefixHash = compiled.cachedPrefixHash;
   }
@@ -9427,7 +9444,7 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
   let analysisError: any = null;
   let primaryAnalysisError = '';
   try {
-    const observeTools = fileDataTools ? createAiToolActivityObserver(activityTracker.report, fileDataTools.access.modules.map(module => module.id)) : undefined;
+    const observeTools = fileDataTools ? createAiToolActivityObserver(activityTracker.report, fileDataTools.access.modules.map(module => module.id), fileDataTools.getSkillOwner) : undefined;
     aiResult = await withAiAgentActivity('document_analysis', () => runNativeAgentInput({ hasNativeInput: fileParts.length > 0,
       primary: () => callChatCompletions(providerConfig, promptMessages, {
         safetyIdentifier: `org_${authContext.orgId}_user_${authContext.userId}_cap_${capability}`,
@@ -10002,7 +10019,7 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
   const mutationCallOptions = { tools: [...relationIntake.tools,...recordTools.tools,...(intakeDataTools?.tools || []).filter((tool:any) => !fieldToolNames.has(tool.function.name) && /^(read_|describe_|get_organization_|count_|aggregate_)/.test(tool.function.name))],
     toolExecutor: (name:string,args:any) => name === 'prepare_relation_record' ? relationIntake.execute(args)
       : fieldToolNames.has(name) ? recordTools.execute(name,args) : intakeDataTools!.execute(name,args),
-    observeTools: createAiToolActivityObserver(activityTracker.report, [targetModuleId, ...(intakeDataTools?.access.modules.map(module => module.id) || [])]),
+    observeTools: createAiToolActivityObserver(activityTracker.report, [targetModuleId, ...(intakeDataTools?.access.modules.map(module => module.id) || [])], intakeDataTools?.getSkillOwner),
     safetyIdentifier: `org_${authContext.orgId}_user_${authContext.userId}_cap_${capability}_${isUpdate ? 'update' : 'create'}_record`,
     responseFormat: { type: 'json_object' },
   };
@@ -12197,7 +12214,7 @@ const handleProcessOperationFromPrompt = async (supabaseUrl: string, serviceRole
     },
   ], {
     tools: processTools?.tools, toolExecutor: processTools?.execute, maxToolRounds: 12,
-    observeTools: processTools ? createAiToolActivityObserver(activityTracker.report, processTools.access.modules.map(module => module.id)) : undefined,
+    observeTools: processTools ? createAiToolActivityObserver(activityTracker.report, processTools.access.modules.map(module => module.id), processTools.getSkillOwner) : undefined,
     safetyIdentifier: `org_${authContext.orgId}_user_${authContext.userId}_cap_${capability}_process_operation`,
   }), activityTracker.report, files.length ? {
     detail: describeAiAttachments(files.map((file: any) => String(file.mimeType || file.mime_type || '').toLowerCase())),

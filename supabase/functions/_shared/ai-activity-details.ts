@@ -8,6 +8,19 @@ export const joinAiActivityLabels = (labels: string[]) => {
   return names.length > 1 ? `${names.slice(0, -1).join('، ')} و ${names.at(-1)}` : names[0] || '';
 };
 
+export const describeAiAgentCollaboration = (agentNames: string[]) => {
+  const names = [...new Set(agentNames.filter(Boolean))];
+  return names.length > 1 ? `در حال هماهنگی ${names[0]} با ${joinAiActivityLabels(names.slice(1))}` : null;
+};
+
+export const describeAiSkillOwners = (args: unknown, ownerLabel: (skillId: string) => string | undefined) => {
+  const ids = (args as { skillIds?: unknown } | null)?.skillIds;
+  if (!Array.isArray(ids) || !ids.length || ids.length > 3) return null;
+  const labels = ids.map(id => typeof id === 'string' ? ownerLabel(id) : undefined);
+  if (labels.some(label => !label)) return null;
+  return `در حال خواندن دستورهای تخصصی ${joinAiActivityLabels(labels.filter((label): label is string => Boolean(label)))}`;
+};
+
 export const describeModuleRead = (modules: string[], label: ModuleLabel, mode?: 'continuation' | 'related'): AiActivityDescription => {
   const names = joinAiActivityLabels(modules.map(module => label(module) || ''));
   const start = mode === 'continuation' ? 'در حال ادامهٔ بررسی' : mode === 'related' ? 'در حال یافتن داده‌های مرتبط در' : 'در حال بررسی';
