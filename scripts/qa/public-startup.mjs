@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { PUBLIC_ECOSYSTEM_GROUPS } from '../../shared/publicEcosystem.mjs';
 
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || pathToFileURL(path.resolve('tmp/ui-review/node_modules/playwright/index.mjs')).href);
 const preview = process.env.PUBLIC_SITE_PREVIEW_ORIGIN || 'http://127.0.0.1:5189';
@@ -52,7 +53,7 @@ try {
   releaseScripts();
   await page.locator('.product-hero h1').waitFor();
   await page.waitForFunction(() => document.fonts.status === 'loaded');
-  assert.equal(await page.locator('.ecosystem-orb').count(), 28);
+  assert.equal(await page.locator('.ecosystem-orb').count(), PUBLIC_ECOSYSTEM_GROUPS.flatMap(group => group.items).length);
   assert.ok(!scripts.some(file => /^\/assets\/App-.*\.js$/.test(file)), 'The marketing host must not request the tenant App entry');
   assert.ok(!scripts.some(file => /FeedbackViewport-|NotificationOverlayPanel-/.test(file)), 'Idle public pages must not download feedback animations or the tenant inbox');
   assert.deepEqual(errors, [], 'Public entry loads without browser errors');
