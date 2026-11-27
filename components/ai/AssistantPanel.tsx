@@ -1043,7 +1043,13 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       composerPreferences: body.composerPreferences ?? composerPreferencesRef.current,
     };
     const { data, error } = await supabase.functions.invoke('ai-assistant', { body: requestBody });
-    if (error) throw error;
+    if (error) {
+      if (body.action === 'confirm_action' && error.context instanceof Response) {
+        const failure = await error.context.clone().json().catch(() => null);
+        if (failure?.message) throw Object.assign(new Error(String(failure.message)), { payload: failure });
+      }
+      throw error;
+    }
     if (!data?.success) {
       const nextError: any = new Error(String(data?.message || 'درخواست دستیار ناموفق بود.'));
       nextError.payload = data;
@@ -3064,6 +3070,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         proposedTask: pendingAiAction?.actionType === 'manage_agent_task' ? pendingAiAction.payload : undefined,
         proposedRecords,
         selectedOperationIndexes: proposedOperations,
+        operationEdits: pendingAiAction?.operationEdits,
       });
       const executedRecords = [
         ...(Array.isArray(data?.createdRecords) ? data.createdRecords : []),
@@ -3094,7 +3101,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       await loadThread();
     } catch (error: any) {
       message.error(toFaErrorMessage(error, 'اجرای اقدام تاییدشده ناموفق بود.'));
-      if (pendingAiAction?.actionType === 'process_operation_from_prompt') {
+      if (pendingAiAction?.actionType === 'process_operation_from_prompt' && error?.payload?.reviewRequired !== true) {
         setPendingAiAction(null);
         await loadThread();
       }
@@ -3629,6 +3636,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         selected: record?.selected !== false,
         fields: record?.fields && typeof record.fields === 'object' ? record.fields : {},
         tables: record?.tables && typeof record.tables === 'object' ? record.tables : {},
+        editedTableKeys: Array.isArray(record?.editedTableKeys) ? record.editedTableKeys : [],
       }));
     }
     return proposedPayload?.payload && typeof proposedPayload.payload === 'object'
@@ -3999,7 +4007,20 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
             )) : null}
             {pendingProcessOperations.length > 0 ? (
               <AiProcessOperationApprovalCard
+                key={pendingAiAction.id}
+                actionId={pendingAiAction.id}
                 operations={pendingProcessOperations}
+                disabled={confirmingAiAction}
+                edits={pendingAiAction.operationEdits || {}}
+                onEdit={(index, values) => setPendingAiAction((current: any) => current ? {
+                  ...current,
+                  operationEdits: { ...current.operationEdits, [index]: { ...current.operationEdits?.[index], ...values } },
+                } : current)}
+                loadTemplateOptions={async (operationIndex, templateId) => {
+                  const data = await callAssistant({ action: 'process_approval_template_options', actionLogId: pendingAiAction.id,
+                    operationIndex, templateId });
+                  return Array.isArray(data.options) ? data.options : [];
+                }}
                 selectedIndexes={Array.isArray(pendingAiAction?.selectedOperationIndexes)
                   ? pendingAiAction.selectedOperationIndexes
                   : pendingProcessOperations.map((_operation: any, index: number) => index)}
@@ -4012,11 +4033,14 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
             <div className="mt-2">
               {String(pendingAiAction?.actionType || '') === 'confirm_generation'
                 ? 'برای تغییر دستور، درخواست اصلاح‌شده را در کادر پیام بنویسید.'
+                : pendingProcessOperations.length > 0
+                ? 'با «ویرایش» می‌توانید فیلدهای هر اقدام را پیش از تأیید تغییر دهید.'
                 : 'برای اصلاح، توضیح جدید را در کادر پیام بنویسید یا فایل صوتی بفرستید؛ دستیار آن را به همین پیش‌نویس اضافه می‌کند.'}
             </div>
             <Space size={6} className="mt-2">
               <Button type="primary" size="small" loading={confirmingAiAction}
                 disabled={Boolean((pendingRecordMutationType && pendingRecordMutationRecords.every(record => record.selected === false))
+                  || (pendingProcessOperations.length && pendingAiAction.selectedOperationIndexes?.length === 0)
                   || (pendingAiAction.actionType === 'agent_task_batch' && pendingAiAction.actions.every((item: any) => item.selected === false)))}
                 onClick={() => void confirmPendingAiAction()}>
                 {pendingRecordMutationType

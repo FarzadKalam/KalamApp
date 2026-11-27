@@ -28,9 +28,12 @@ export const resolveAiRecordSchema = (base: any, configured: any, permission: an
     && field.isActive !== false && field.disabled !== true
     && !['image', 'json', 'checklist', 'progress_stages', 'readonly_lookup', 'tags'].includes(field.type));
   return { ...base, fields, conditionalDisplay: configured?.conditionalDisplay || base?.conditionalDisplay, contextFields: undefined,
-    tables: (base?.tables || []).filter((table: any) => permission?.fields?.[table.key] !== false)
+    tables: (base?.tables || []).filter((table: any) => permission?.fields?.[table.key] !== false
+      && permission?.field_actions?.[table.key]?.view !== false)
       .map((table: any) => ({ ...table, columns: table.columns.filter((column: any) =>
-        permission?.fields?.[`${table.key}.${column.key}`] !== false && permission?.fields?.[column.key] !== false) })) };
+        permission?.fields?.[`${table.key}.${column.key}`] !== false && permission?.fields?.[column.key] !== false
+        && permission?.field_actions?.[`${table.key}.${column.key}`]?.view !== false
+        && permission?.field_actions?.[column.key]?.view !== false) })) };
 };
 
 export const hydrateAiRecordOptions = (schema: any, rows: any[], mayAdd: boolean) => ({

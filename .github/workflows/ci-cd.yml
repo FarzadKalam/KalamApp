@@ -27,6 +27,10 @@ on:
         description: 'Publish the AI calendar and provider release with only phases 621 and 622'
         type: boolean
         default: false
+      ai_approval_release:
+        description: 'Publish the approvals frontend and AI assistant Edge Function without database migrations'
+        type: boolean
+        default: false
       skip_browser_checks:
         description: 'Skip browser and screenshot checks when explicitly requested by the release owner'
         type: boolean
@@ -360,6 +364,7 @@ jobs:
           npx vitest run supabase/functions/ai-assistant/operational-preflight.test.ts supabase/functions/_shared/ai-gateway.test.ts supabase/functions/_shared/ai-provider-keys.test.ts
           supabase/functions/_shared/ai-native-skills.test.ts supabase/functions/_shared/ai-agent-data.test.ts supabase/functions/_shared/ai-skills/instagram-tools.test.ts
           supabase/functions/_shared/ai-process-data.test.ts supabase/functions/_shared/ai-process-operations.test.ts supabase/functions/ai-assistant/process-execution.test.ts
+          supabase/functions/_shared/ai-approval-edits.test.ts supabase/functions/ai-assistant/record-execution.test.ts
           supabase/functions/_shared/ai-context-lifecycle.test.ts supabase/functions/ai-assistant/thread-memory.test.ts supabase/functions/ai-assistant/free-chat.test.ts
           supabase/functions/_shared/ai-reasoning.test.ts
           supabase/functions/_shared/ai-focused-skills.test.ts supabase/functions/main/index.test.ts components/ai/AiAgentSkillsEditor.test.tsx components/ai/AiVoiceRecorder.test.tsx
@@ -370,7 +375,7 @@ jobs:
           supabase/functions/_shared/ai-agent-task-queue.test.ts supabase/functions/workflow-interval-runner/agent-task-delivery.test.ts
           supabase/functions/_shared/ai-record-files.test.ts supabase/functions/_shared/ai-record-lookups.test.ts supabase/functions/_shared/ai-record-display.test.ts
           components/ai/AiRecordResultCard.test.tsx components/ai/AiUsageHistoryTable.test.tsx utils/aiMessageParts.test.ts
-          supabase/functions/ai-assistant/record-execution.test.ts supabase/functions/_shared/ai-record-contract.test.ts supabase/functions/_shared/ai-agents.test.ts supabase/functions/_shared/ai-agent-contract.test.ts supabase/functions/_shared/ai-agent-inbox.test.ts utils/__tests__/aiAaasFoundation.test.ts
+          supabase/functions/_shared/ai-record-contract.test.ts supabase/functions/_shared/ai-agents.test.ts supabase/functions/_shared/ai-agent-contract.test.ts supabase/functions/_shared/ai-agent-inbox.test.ts utils/__tests__/aiAaasFoundation.test.ts
           components/ai/AiMessageComposer.test.tsx components/ai/AiGenerationStatusCard.test.tsx
           components/ai/AiChatSurfaceV2.test.tsx components/ai/AssistantPanel.operators.test.tsx
           components/ai/AiCapabilityComposerActions.test.tsx components/ai/AiComposeModelBar.test.tsx components/AdaptivePickerSurface.test.tsx
@@ -844,7 +849,7 @@ jobs:
           fi
 
       - name: Apply the explicitly approved migrations
-        if: ${{ !inputs.frontend_only }}
+        if: ${{ !inputs.frontend_only && !inputs.ai_approval_release }}
         shell: pwsh
         env:
           DEPLOY_HOST: ${{ secrets.SERVER_HOST }}
@@ -870,7 +875,9 @@ jobs:
           DEPLOY_FUNCTIONS_PATH: /opt/kalamapp/supabase/docker/volumes/functions
           DEPLOY_FUNCTIONS_COMPOSE_DIR: /opt/kalamapp/supabase/docker
         run: |
-          $functions = if ('${{ inputs.ai_calendar_release }}' -eq 'true') {
+          $functions = if ('${{ inputs.ai_approval_release }}' -eq 'true') {
+            @('ai-assistant')
+          } elseif ('${{ inputs.ai_calendar_release }}' -eq 'true') {
             @('workflow-interval-runner','ai-assistant','bot-webhook')
           } else {
             @('goal-progress','report-runtime','workflow-interval-runner','ai-assistant','bot-webhook','mcp-server','api-gateway')

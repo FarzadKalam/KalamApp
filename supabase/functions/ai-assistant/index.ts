@@ -22,6 +22,7 @@ import { createProcessDataRuntime, sanitizeProcessValue, PROCESS_RECORD_FIELDS, 
 import { createEmployeeDataRuntime } from '../_shared/ai-employee-data.ts';
 import { createGoalDataRuntime } from '../_shared/ai-goal-data.ts';
 import { summarizeMutationCandidates } from '../_shared/ai-mutation-context.ts';
+import { APPROVAL_ROW, isInvoiceApprovalTable, mergeInvoiceApprovalRows, prepareInvoiceApprovalRows } from '../_shared/ai-approval-table.ts';
 import { createRelationIntakeRuntime, findRelationField } from '../_shared/ai-relation-intake.ts';
 import {createCallContactTools,CALL_CONTEXT_TOOL_MODULES} from '../_shared/voip-contact-tools.ts';
 import { NATIVE_AGENT_SKILLS, runNativeAgentInput } from '../_shared/ai-native-skills.ts';
@@ -135,6 +136,7 @@ import {
 } from '../_shared/ai-skills/pricing-adjustment.ts';
 import { normalizeProcessTemplateBlueprint } from '../_shared/ai-skills/project-process.ts';
 import { buildAiCalendarDraft, CALENDAR_CONTENT_TYPES, isCalendarPlanningRequest, isCalendarProcessTemplate, normalizeCalendarSchedule } from '../_shared/ai-content-calendar.ts';
+import { getProcessApprovalFields, processApprovalFieldPermission, validateProcessApprovalEdits } from '../_shared/ai-process-approval.ts';
 import {
   buildInstagramShowcaseCardDraft,
   buildInstagramWorkflowRuleDraft,
@@ -5354,17 +5356,31 @@ const sanitizeAiRecordPayload = (rawPayload: any, schema: any) => {
   return payload;
 };
 
-const sanitizeAiRecordTables = (rawPayload: any, schema: any) => {
+const sanitizeAiRecordTables = (rawPayload: any, schema: any, options?: {
+  emptyKeys?: Set<string>; invoiceModule?: string; keepInvoiceRow?: boolean;
+}) => {
   const tableSchemas = Array.isArray(schema?.tables) ? schema.tables : [];
   const rawTables = rawPayload?.tables && typeof rawPayload.tables === 'object' ? rawPayload.tables : {};
   const result: Record<string, any[]> = {};
   for (const tableSchema of tableSchemas) {
     const tableKey = String(tableSchema?.key || '').trim();
     if (!tableKey || !Array.isArray(rawTables[tableKey])) continue;
+    const invoiceRows = options?.invoiceModule && isInvoiceApprovalTable(options.invoiceModule, tableKey);
+    const columns = (tableSchema?.columns || []).filter((column: any) => !invoiceRows || !column.readonly);
+    if (options?.emptyKeys?.has(tableKey) && rawTables[tableKey].length > 200) {
+      throw new Error('جدول قابل تأیید حداکثر ۲۰۰ ردیف دارد.');
+    }
     const rows = rawTables[tableKey].slice(0, 200)
-      .map((row: any) => sanitizeAiRecordPayload({ fields: row }, { fields: tableSchema?.columns || [] }))
+      .map((row: any) => ({
+        ...sanitizeAiRecordPayload({ fields: row }, { fields: columns }),
+        ...(invoiceRows && options?.keepInvoiceRow && row && Object.hasOwn(row, APPROVAL_ROW)
+          ? { [APPROVAL_ROW]: row[APPROVAL_ROW] } : {}),
+      }))
       .filter((row: any) => Object.keys(row || {}).length > 0);
-    if (rows.length > 0) result[tableKey] = rows;
+    if (options?.emptyKeys?.has(tableKey) && rawTables[tableKey].length && !rows.length) {
+      throw new Error('جدول شامل ردیف قابل ثبت نیست.');
+    }
+    if (rows.length > 0 || rawTables[tableKey].length === 0 && options?.emptyKeys?.has(tableKey)) result[tableKey] = rows;
   }
   return result;
 };
@@ -5444,7 +5460,8 @@ const resolveAiMutationRelations = async (
     }
     const tables: Record<string, any[]> = {};
     for (const [tableKey, columns] of tableSpecs) {
-      tables[tableKey] = await Promise.all((Array.isArray(draft.tables?.[tableKey]) ? draft.tables[tableKey] : []).map(async (row: any) => {
+      if (!Array.isArray(draft.tables?.[tableKey])) continue;
+      tables[tableKey] = await Promise.all(draft.tables[tableKey].map(async (row: any) => {
         const next = { ...(row || {}) };
         for (const [key, spec] of columns) {
           if (Object.prototype.hasOwnProperty.call(next, key)) next[key] = await resolveAiRelationValue(supabaseUrl, serviceRoleKey, orgId, spec, next[key], relationCache, authContext);
@@ -7574,7 +7591,8 @@ const handleGetThread = async (supabaseUrl: string, serviceRoleKey: string, auth
             const storedKeys = new Set((proposed.record_creation_schema?.fields || []).map((field: any) => field.key));
             schema.fields = schema.fields.filter((field: any) => storedKeys.has(field.key));
             const visibleRecords = (proposed.records || []).map((record: any) => ({ ...record, fields: sanitizeAiRecordPayload(record, { ...schema,
-              fields: schema.fields.map((field: any) => ({ ...field, options: [...(field.options || []), ...(proposed.option_proposals || []).filter((option: any) => option.category === field.dynamicOptionsCategory)] })) }), tables: sanitizeAiRecordTables(record, schema) }));
+              fields: schema.fields.map((field: any) => ({ ...field, options: [...(field.options || []), ...(proposed.option_proposals || []).filter((option: any) => option.category === field.dynamicOptionsCategory)] })) }),
+              tables: sanitizeAiRecordTables(record, schema, { invoiceModule: targetModuleId, keepInvoiceRow: true }) }));
             const options = prepareAiRecordOptions(visibleRecords, schema, canAddAiDynamicOption(permission));
             if (!options.questions.length) proposedAction = {
               id: action.id, actionType: action.action_type, targetModuleId, title: schema.moduleLabel, status: 'proposed',
@@ -7583,6 +7601,22 @@ const handleGetThread = async (supabaseUrl: string, serviceRoleKey: string, auth
             };
           }
         } catch { /* A revoked plan or schema must not expose an old editable card. */ }
+      }
+      if (action?.action_type === 'process_operation_from_prompt') {
+        try {
+          const proposed = action.proposed_payload;
+          const page = await buildPermittedPageContext(supabaseUrl, serviceRoleKey, authContext, {
+            ...proposed.context, mode: 'record', moduleId: proposed.module_id, recordId: proposed.record_id,
+          });
+          if (page.permitted) {
+            const policy = await processMutationPolicy(supabaseUrl, serviceRoleKey, authContext);
+            const operations = Array.isArray(proposed.operations) ? proposed.operations : [];
+            operations.forEach((operation: any) => assertProcessOperationPermissions(operation, page, policy));
+            proposedAction = { id: action.id, actionType: action.action_type, status: 'proposed',
+              moduleId: page.moduleId, recordId: page.recordId,
+              operations: buildProcessApprovalPreview(operations, policy) };
+          }
+        } catch { /* Current permissions decide which proposals can be restored. */ }
       }
     }
     return json(200, {
@@ -9638,6 +9672,19 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
   }
   const permittedUpdateRecords = isUpdate ? (Array.isArray(pageContext?.records) ? pageContext.records : []).slice(0, 20) : [];
   const permittedUpdateRecordIds = new Set(permittedUpdateRecords.map((record: any) => String(record?.id || '').trim()).filter(Boolean));
+  const invoiceTableSpecs = isUpdate ? tables.filter((table: any) => isInvoiceApprovalTable(targetModuleId, table.key)) : [];
+  const loadInvoiceApprovalSnapshots = async (ids: string[]) => {
+    const permittedIds = [...new Set(ids)].filter(id => permittedUpdateRecordIds.has(id) && isUuid(id));
+    if (!invoiceTableSpecs.length || !permittedIds.length) return new Map<string, any>();
+    // Exact record IDs only. View conditions may refer to arbitrary record fields.
+    const query = { org_id: `eq.${authContext.orgId}`, id: `in.(${permittedIds.join(',')})`, select: '*', limit: permittedIds.length };
+    const rows = authContext.callerAuthorization
+      ? await actorFileRest(supabaseUrl, serviceRoleKey, authContext.callerAuthorization, targetTable, query)
+      : await restSelect(supabaseUrl, serviceRoleKey, targetTable, query);
+    return new Map<string, any>(rows.filter((row: any) => canAccessAssignedRecord(row, authContext, getRecordScope(targetPerm), targetPerm))
+      .map((row: any) => [String(row.id), row]));
+  };
+  const visibleInvoiceSnapshots = await loadInvoiceApprovalSnapshots(permittedUpdateRecords.slice(0, 3).map((row: any) => row.id));
   const planContext = await loadTenantAiPlanContext(supabaseUrl, serviceRoleKey, authContext);
   const canUseKnowledge = canUseOrganizationKnowledge(planContext);
   const files = (Array.isArray(body?.files) ? body.files : [body?.file || body?.attachment]).filter(Boolean);
@@ -9699,6 +9746,9 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
     tables.length > 0 ? 'جدول‌های مجاز و ستون‌های آن‌ها را در صورت نیاز داخل tables برگردان.' : '',
     tableLines,
     'برای فاکتور، invoiceItems جدول اقلام و payments جدول دریافت و پرداخت است. ردیف‌ها را جداگانه و کامل برگردان؛ مقدارهای readonly و محاسباتی را فقط در صورت اطمینان بنویس.',
+    isUpdate && tables.some((table: any) => isInvoiceApprovalTable(targetModuleId, table.key))
+      ? 'برای ویرایش جدول فاکتور، فقط تغییرات را بفرست. به ردیف موجود _existing_row_number (شماره از ۱ در جدول اصلی) و فیلدهای تغییرکرده بده. برای ردیف جدید _row_action="add" بفرست. برای حذف یک ردیف، کاربر از جدول کارت استفاده می‌کند. اگر ردیف اصلی معلوم نیست، سؤال بپرس و آن را حدس نزن.'
+      : '',
     'قالب هر رکورد: {"fields":{},"tables":{"invoiceItems":[],"payments":[]}}. برای ویرایش، record_id را حفظ کن و فقط تغییرات معتبر را اعمال کن.',
     '',
     'قالب خروجی:',
@@ -9816,6 +9866,16 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
     ? [
         'رکوردهای مجاز برای ویرایش (شناسه فقط برای تطبیق داخلی است و نباید در reply نمایش داده شود):',
         JSON.stringify(summarizeMutationCandidates(permittedUpdateRecords)),
+        ...(visibleInvoiceSnapshots.size ? [
+          'نمونهٔ ردیف‌های مجاز نامزدهای فاکتور (برای ادامهٔ یک جدول، رکورد را با ابزار خواندن داده بررسی کن):',
+          JSON.stringify(Array.from(visibleInvoiceSnapshots.values()).map(record => ({
+            record_id: record.id,
+            tables: Object.fromEntries(invoiceTableSpecs
+              .map((table: any) => [table.key, (Array.isArray(record[table.key]) ? record[table.key] : []).slice(0, 20).map((row: any, index: number) => ({
+                ...sanitizeAiRecordPayload({ fields: row }, { fields: table.columns }), _existing_row_number: index + 1,
+              }))])),
+          }))),
+        ] : []),
         'این فهرست فقط برای یافتن مقصد است. پیش از ویرایش جدول یا متن بلند، مقدار کامل همان فیلد را با ابزار read_process_context و section=field و صفحه‌بندی بخوان؛ جدول یا جزئیات را از خلاصه بازسازی نکن.',
       ].join('\n')
     : '';
@@ -9951,6 +10011,9 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
   if (rawRecordDrafts.length === 1) {
     rawRecordDrafts = rawRecordDrafts.map((draft: any) => ({ ...draft, fields: { ...draft.fields, ...confirmedFieldAnswers } }));
   }
+  const draftInvoiceSnapshots = await loadInvoiceApprovalSnapshots(rawRecordDrafts.slice(0, 20).map((draft: any) =>
+    String(draft?.record_id || draft?.recordId || draft?.target_record_id
+      || (permittedUpdateRecords.length === 1 ? permittedUpdateRecords[0]?.id : '') || '')));
   if (isUpdate) rawRecordDrafts = rawRecordDrafts.map((draft: any) => ({ ...draft,
     original: permittedUpdateRecords.find((record: any) => String(record.id) === String(draft.record_id)) || {} }));
   rawRecordDrafts = await resolveAiMutationRelations(supabaseUrl, serviceRoleKey, authContext.orgId, rawRecordDrafts, effectiveSchema, authContext);
@@ -9989,9 +10052,28 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
         ).trim())
         : null;
       const tablePayload = sanitizeAiRecordTables(recordDraft, effectiveSchema);
+      const editedTableKeys: string[] = [];
+      const invoice = draftInvoiceSnapshots.get(String(currentRecord?.id || ''));
       if (isUpdate && currentRecord) {
         for (const tableSchema of tables) {
           const tableKey = String(tableSchema?.key || '').trim();
+          if (isInvoiceApprovalTable(targetModuleId, tableKey)) {
+            if (!invoice) {
+              delete tablePayload[tableKey];
+              continue;
+            }
+            const currentRows = Array.isArray(invoice[tableKey]) ? invoice[tableKey] : [];
+            const proposedRows = recordDraft?.tables?.[tableKey];
+            const prior = visibleInvoiceSnapshots.get(String(currentRecord.id));
+            if (Array.isArray(proposedRows) && proposedRows.length && prior && prior.updated_at !== invoice.updated_at) {
+              throw new Error('ردیف‌های فاکتور در زمان آماده‌سازی تغییر کرده‌اند. درخواست را دوباره بفرستید.');
+            }
+            const { rows, changed } = prepareInvoiceApprovalRows(currentRows, proposedRows, row =>
+              sanitizeAiRecordPayload({ fields: row }, { fields: tableSchema.columns.filter((column: any) => !column.readonly) }));
+            tablePayload[tableKey] = rows;
+            if (changed) editedTableKeys.push(tableKey);
+            continue;
+          }
           if (tableKey && !Object.prototype.hasOwnProperty.call(tablePayload, tableKey) && Array.isArray(currentRecord?.[tableKey])) {
             tablePayload[tableKey] = currentRecord[tableKey];
           }
@@ -10017,6 +10099,8 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
         record_title: isUpdate ? buildAiRecordTitle(currentRecord, `${moduleLabel} ${index + 1}`) : `${moduleLabel} ${index + 1}`,
         fields: fieldsPayload,
         tables: tablePayload,
+        editedTableKeys,
+        table_base_updated_at: invoice?.updated_at || null,
       };
     })
     .filter((draft: any) => draft && (Object.keys(draft.fields || {}).length > 0 || Object.keys(draft.tables || {}).length > 0 || (isUpdate && intakeAttachments.length > 0)));
@@ -11307,7 +11391,8 @@ const buildProcessTaskPayload = ({
     priority: String(stage?.priority || 'medium').trim() || 'medium',
     description: String(stage?.description || stage?.metadata?.description || '').trim() || null,
     task_type: String(stage?.task_type || stage?.metadata?.task_type || 'فعالیت سازمانی').trim() || 'فعالیت سازمانی',
-    due_date: stage?.due_date || stage?.due_at || addDaysIso(stage?.due_days),
+    due_date: stage?.due_date === null ? null : stage?.due_date || stage?.due_at || addDaysIso(stage?.due_days),
+    ...(stage?.start_date ? { start_date: stage.start_date } : {}),
     wage: numberFrom(stage?.wage, 0),
     weight: numberFrom(stage?.weight, 0),
     sort_order: Number(stage?.sort_order || 10),
@@ -11363,7 +11448,7 @@ const loadAiProcessContext = async (_url: string, _key: string, _auth: any, page
   source: 'read_process_context', coverage: 'not_loaded',
 });
 
-const loadAiCalendarTemplateChoices = async (url: string, key: string, auth: any, page: any) => {
+const loadAiCalendarTemplateChoices = async (url: string, key: string, auth: any, page: any, target = 'content_calendars') => {
   if (page.moduleId !== 'content_calendars') return null;
   const plan = await loadTenantAiPlanContext(url, key, auth);
   const permission = getModulePermission(auth.permissions, 'process_templates');
@@ -11376,13 +11461,17 @@ const loadAiCalendarTemplateChoices = async (url: string, key: string, auth: any
   do {
     const query = {
       org_id: `eq.${auth.orgId}`, is_active: 'eq.true',
-      select: 'id,name,description,module_id,module_ids,is_active,created_by,updated_by',
+      select: 'id,org_id,name,description,module_id,module_ids,is_active,created_by,updated_by',
       order: 'id.asc', limit: 50, ...(cursor ? { id: `gt.${cursor}` } : {}),
     };
     const next = auth.callerAuthorization
       ? await actorFileRest(url, key, auth.callerAuthorization, 'process_templates', query)
       : await restSelect(url, key, 'process_templates', query);
-    rows.push(...next.filter(row => isCalendarProcessTemplate(row) && canAccessAssignedRecord(row, auth, getRecordScope(permission), permission)));
+    rows.push(...next.filter(row => (
+      target === 'projects'
+        ? [...(Array.isArray(row.module_ids) ? row.module_ids : []), row.module_id].includes('projects')
+        : isCalendarProcessTemplate(row)
+    ) && canAccessAssignedRecord(row, auth, getRecordScope(permission), permission)));
     cursor = next.length === 50 ? next.at(-1)?.id : null;
   } while (cursor && rows.length < 80);
   return {
@@ -11435,6 +11524,10 @@ const loadAiProcessOperationContext = async (url: string, key: string, auth: any
       const row = await runtime.getRecord(target, id);
       if (moduleId === 'content_calendars' && target === 'process_templates' && op.type !== 'create_content_project' && !isCalendarProcessTemplate(row)) {
         throw new Error('الگوی انتخاب‌شده فعال و سازگار با تقویم نیست.');
+      }
+      if (target === 'process_templates' && op.type === 'create_content_project' &&
+        (row.is_active === false || ![...(Array.isArray(row.module_ids) ? row.module_ids : []), row.module_id].includes('projects'))) {
+        throw new Error('الگوی انتخاب‌شده فعال و سازگار با پروژه نیست.');
       }
       if (target === 'tasks' && !(row.source_module_id === moduleId && row.source_record_id === recordId
         || row.recurrence_info?.process_links?.[moduleId] === recordId || moduleId === 'tasks' && id === recordId
@@ -11527,8 +11620,55 @@ const processMutationPolicy = async (url: string, key: string, auth: any) => {
     const perm = auth.permissions?.[moduleId];
     return Boolean(perm && canViewModuleWithPlan(plan,auth.permissions,moduleId)
       && (action === 'view' || (action === 'create' ? (perm.create ?? perm.edit) !== false : perm.edit !== false))
-      && (!field || !isSensitiveField(field) && perm.fields?.[field] !== false && perm.field_actions?.[field]?.[action] !== false));
+      && (!field || !isSensitiveField(field) && perm.fields?.[field] !== false
+        && perm.field_actions?.[field]?.view !== false && perm.field_actions?.[field]?.[action] !== false));
   } };
+};
+
+const buildProcessApprovalPreview = (operations: any[], policy: Awaited<ReturnType<typeof processMutationPolicy>>) =>
+  operations.map(operation => ({ ...operation,
+    editable_fields: getProcessApprovalFields(operation).filter(field =>
+      policy.can(...processApprovalFieldPermission(operation, field.key))
+      && (!['template_id', 'template_stage_id'].includes(field.key) || policy.can('process_templates', 'view')),
+    ).map(field => field.key),
+  }));
+
+const handleProcessApprovalTemplateOptions = async (url: string, key: string, auth: any, body: any) => {
+  const actionId = normalizeId(body?.actionLogId);
+  const index = body?.operationIndex;
+  if (!isUuid(actionId) || !Number.isInteger(index) || index < 0 || index >= 8) {
+    return json(400, { success: false, message: 'کارت تأیید معتبر نیست.' });
+  }
+  const [action] = await restSelect(url, key, 'ai_action_logs', {
+    id: `eq.${actionId}`, org_id: `eq.${auth.orgId}`, created_by: `eq.${auth.userId}`, status: 'eq.proposed',
+    action_type: 'eq.process_operation_from_prompt', select: 'proposed_payload', limit: 1,
+  });
+  const proposed = action?.proposed_payload;
+  const operation = proposed?.operations?.[index];
+  if (!operation || !['schedule_calendar_content', 'create_content_project'].includes(operation.type)) {
+    return json(404, { success: false, message: 'اقدام تقویم برای انتخاب الگو پیدا نشد.' });
+  }
+  const page = await buildPermittedPageContext(url, key, auth, {
+    ...proposed.context, mode: 'record', moduleId: proposed.module_id, recordId: proposed.record_id,
+  });
+  const policy = await processMutationPolicy(url, key, auth);
+  if (!page.permitted || !policy.can('process_templates', 'view') || !policy.can(...processApprovalFieldPermission(operation, 'template_id'))) {
+    return json(403, { success: false, message: 'دسترسی به الگوهای این اقدام تأیید نشد.' });
+  }
+  assertProcessOperationPermissions(operation, page, policy);
+  const templateId = normalizeId(body?.templateId);
+  if (!templateId) {
+    const choices = await loadAiCalendarTemplateChoices(url, key, auth, page, operation.type === 'create_content_project' ? 'projects' : undefined);
+    return json(200, { success: true, options: (choices?.templates || []).map((item: any) => ({ value: item.id, label: item.name })) });
+  }
+  if (!isUuid(templateId) || operation.type !== 'schedule_calendar_content') {
+    return json(400, { success: false, message: 'الگوی انتخاب‌شده معتبر نیست.' });
+  }
+  const runtime = await createPermittedProcessRuntime(url, key, auth);
+  const selected = await runtime.getRecord('process_templates', templateId);
+  if (!isCalendarProcessTemplate(selected)) return json(400, { success: false, message: 'این الگو برای تقویم قابل استفاده نیست.' });
+  const stages = await runtime.allStages('process_templates', templateId);
+  return json(200, { success: true, options: stages.map((stage: any) => ({ value: stage.id, label: stage.stage_name })) });
 };
 
 const executeAiProcessOperation = async (
@@ -12063,10 +12203,10 @@ const handleProcessOperationFromPrompt = async (supabaseUrl: string, serviceRole
   operations.forEach(operation => assertProcessOperationPermissions(operation,pageContext,mutationPolicy));
   const previewContext = await loadAiProcessOperationContext(supabaseUrl, serviceRoleKey, authContext, pageContext, operations);
   for (const operation of operations) {
-    if (operation.type !== 'schedule_calendar_content' || !operation.template_id) continue;
+    if (!['schedule_calendar_content', 'create_content_project'].includes(operation.type) || !operation.template_id) continue;
     const template = previewContext.templates.find(item => item.id === operation.template_id);
     operation.template_name = template.name;
-    operation.template_stage_name = template.stages.find(stage => stage.id === operation.template_stage_id)?.stage_name;
+    operation.template_stage_name = template.stages.find((stage: any) => stage.id === operation.template_stage_id)?.stage_name;
   }
   const reply = String(parsed?.reply || '').trim() || 'پیشنهاد اقدام‌های فرآیندی آماده است.';
   { // Caller flags never bypass durable central approval.
@@ -12148,7 +12288,7 @@ const handleProcessOperationFromPrompt = async (supabaseUrl: string, serviceRole
         actionType: 'process_operation_from_prompt',
         moduleId: pageContext.moduleId,
         recordId: pageContext.recordId,
-        operations,
+        operations: buildProcessApprovalPreview(operations, mutationPolicy),
         status: 'proposed',
       },
       operations,
@@ -16274,13 +16414,29 @@ const executeProposedActionLog = async (
         return { status: 400, payload: { success: false, message: 'رکورد مقصد ویرایش با پیشنهاد اولیه مطابقت ندارد.' } };
       }
     }
-    const mutationDrafts = optionPreparation.records
-      .map((draft: any) => ({
-        record_id: String(draft?.record_id || draft?.recordId || '').trim() || null,
-        fields: sanitizeAiRecordPayload({ fields: draft?.fields || draft?.payload || {} }, schema),
-        tables: sanitizeAiRecordTables({ tables: draft?.tables || {} }, schema),
-      }))
-      .filter((draft: any) => Object.keys(draft.fields).length > 0 || Object.keys(draft.tables).length > 0 || (isUpdate && proposed.intake_attachments?.length > 0));
+    let mutationDrafts: any[];
+    try {
+      mutationDrafts = optionPreparation.records.map((draft: any) => {
+        const record_id = String(draft?.record_id || draft?.recordId || '').trim() || null;
+        const stored = isUpdate ? storedRecords.find((item: any) => item.record_id === record_id) : null;
+        const edited = new Set<string>([
+          ...(Array.isArray(stored?.editedTableKeys) ? stored.editedTableKeys : []),
+          ...(Array.isArray(draft?.editedTableKeys) ? draft.editedTableKeys : []),
+        ].filter((key): key is string => typeof key === 'string'));
+        const rawTables = Object.fromEntries(Object.entries(draft?.tables || {}).filter(([key]) =>
+          !isUpdate || !isInvoiceApprovalTable(targetModuleId, key) || edited.has(key)));
+        return {
+          record_id,
+          fields: sanitizeAiRecordPayload({ fields: draft?.fields || draft?.payload || {} }, schema),
+          tables: sanitizeAiRecordTables({ tables: rawTables }, schema, {
+            emptyKeys: edited, invoiceModule: isUpdate ? targetModuleId : undefined, keepInvoiceRow: isUpdate,
+          }),
+          table_base_updated_at: stored?.table_base_updated_at || null,
+        };
+      }).filter((draft: any) => Object.keys(draft.fields).length > 0 || Object.keys(draft.tables).length > 0 || (isUpdate && proposed.intake_attachments?.length > 0));
+    } catch (error) {
+      return { status: 400, payload: { success: false, message: error instanceof Error ? error.message : 'ردیف‌های جدول معتبر نیستند.' } };
+    }
     if (mutationDrafts.length === 0) {
       return { status: 400, payload: { success: false, message: `اطلاعات کافی برای ${mutationVerb} رکورد وجود ندارد.` } };
     }
@@ -16295,11 +16451,38 @@ const executeProposedActionLog = async (
     };
     if (mutationDrafts.some((draft: any) => Object.entries(draft.fields || {}).some(([key,value]) => fieldDenied(key,value))
       || Object.entries(draft.tables || {}).some(([key,rows]) => fieldDenied(key,rows)
-        || (Array.isArray(rows) && rows.some((row: any) => Object.entries(row || {}).some(([column,value]) => fieldDenied(column,value) || fieldDenied(`${key}.${column}`,value))))))) {
+        || ((!isUpdate || !isInvoiceApprovalTable(targetModuleId, key)) && Array.isArray(rows)
+          && rows.some((row: any) => Object.entries(row || {}).some(([column,value]) => fieldDenied(column,value) || fieldDenied(`${key}.${column}`,value))))))) {
       return { status: 403, payload: { success: false, message: 'دسترسی تغییر یا پاک‌کردن مقدار یکی از فیلدها را ندارید؛ پیش‌نویس را اصلاح کنید.' } };
     }
 
     const resolvedMutationDrafts = await resolveAiMutationRelations(supabaseUrl, serviceRoleKey, authContext.orgId, mutationDrafts, schema, authContext);
+    if (isUpdate) {
+      for (const draft of resolvedMutationDrafts) {
+        const current = validationRows.find((record: any) => record.id === draft.record_id);
+        for (const [key, rows] of Object.entries(draft.tables)) {
+          if (!isInvoiceApprovalTable(targetModuleId, key) || !Array.isArray(rows)) continue;
+          if (!current || !draft.table_base_updated_at || current.updated_at !== draft.table_base_updated_at) {
+            return { status: 409, payload: { success: false, message: 'فاکتور پس از آماده‌شدن کارت تغییر کرده است. پیش‌نویس را دوباره بسازید.' } };
+          }
+          try {
+            const mayDelete = targetPerm.field_actions?.[key]?.delete !== false
+              && !(AI_RECORD_SCHEMAS[targetModuleId]?.tables?.find((table: any) => table.key === key)?.columns || []).some((column: any) =>
+                targetPerm.field_actions?.[`${key}.${column.key}`]?.delete === false || targetPerm.field_actions?.[column.key]?.delete === false);
+            const columns = schema.tables.find((table: any) => table.key === key)?.columns || [];
+            draft.tables[key] = mergeInvoiceApprovalRows(Array.isArray(current[key]) ? current[key] : [], rows, mayDelete, (values, original) => {
+              const before = original ? sanitizeAiRecordPayload({ fields: original }, { fields: columns }) : {};
+              if (Object.entries(values).some(([column, value]) => JSON.stringify(value) !== JSON.stringify(before[column])
+                && (fieldDenied(column, value) || fieldDenied(`${key}.${column}`, value)))) {
+                throw new Error('دسترسی تغییر یکی از ستون‌های فاکتور را ندارید.');
+              }
+            });
+          } catch (error) {
+            return { status: 400, payload: { success: false, message: error instanceof Error ? error.message : 'ردیف‌های فاکتور معتبر نیستند.' } };
+          }
+        }
+      }
+    }
     mutationDrafts.splice(0, mutationDrafts.length, ...resolvedMutationDrafts);
     const moduleLabel = String(proposed.module_label || schema?.moduleLabel || targetModuleId).trim() || targetModuleId;
     const createdRecords: any[] = [];
@@ -16348,9 +16531,11 @@ const executeProposedActionLog = async (
       }
       await persistApprovedOptions();
       for (const draft of mutationDrafts) {
+        const editsInvoiceTable = Object.keys(draft.tables).some(key => isInvoiceApprovalTable(targetModuleId, key));
         const patchedRows = await restPatch(supabaseUrl, serviceRoleKey, targetTable, {
           id: `eq.${draft.record_id}`,
           org_id: `eq.${authContext.orgId}`,
+          ...(editsInvoiceTable && draft.table_base_updated_at ? { updated_at: `eq.${draft.table_base_updated_at}` } : {}),
         }, {
           ...draft.fields,
           ...draft.tables,
@@ -16485,21 +16670,31 @@ const executeProposedActionLog = async (
     if (selectedIndexes.length === 0) {
       return { status: 400, payload: { success: false, message: 'حداقل یک اقدام فرآیندی را برای اجرا انتخاب کنید.' } };
     }
-    const mutationPolicy = await processMutationPolicy(supabaseUrl,serviceRoleKey,authContext);
-    selectedIndexes.forEach(index => assertProcessOperationPermissions(operations[index],pageContext,mutationPolicy));
-    const [processContext, orgPeopleContext] = await Promise.all([
-      loadAiProcessOperationContext(supabaseUrl, serviceRoleKey, authContext, pageContext, selectedIndexes.map(index => operations[index])),
-      loadOrgPeopleContext(supabaseUrl, serviceRoleKey, authContext, String(proposed.prompt || '')),
-    ]);
     if (selectedIndexes.length > 8) throw new Error('هر کارت حداکثر هشت اقدام دارد.');
+    const mutationPolicy = await processMutationPolicy(supabaseUrl,serviceRoleKey,authContext);
+    let selectedOperations: any[], processContext: any, orgPeopleContext: any;
+    try {
+      const overrides = body?.operationEdits;
+      if (overrides !== undefined && (!overrides || typeof overrides !== 'object' || Array.isArray(overrides))) {
+        throw new Error('ویرایش‌های کارت معتبر نیستند.');
+      }
+      selectedOperations = selectedIndexes.map(index => validateProcessApprovalEdits(operations[index], overrides?.[index], mutationPolicy.can));
+      selectedOperations.forEach(operation => assertProcessOperationPermissions(operation, pageContext, mutationPolicy));
+      [processContext, orgPeopleContext] = await Promise.all([
+        loadAiProcessOperationContext(supabaseUrl, serviceRoleKey, authContext, pageContext, selectedOperations),
+        loadOrgPeopleContext(supabaseUrl, serviceRoleKey, authContext, String(proposed.prompt || '')),
+      ]);
+    } catch (error) {
+      return { status: 422, payload: { success: false, reviewRequired: true, message: error instanceof Error ? error.message : 'بازبینی اقدام‌ها ناموفق بود.' } };
+    }
     const claimed = await restPatch(supabaseUrl,serviceRoleKey,'ai_action_logs',{
       id: `eq.${actionLogId}`,org_id: `eq.${authContext.orgId}`,status: 'eq.proposed',
     },{ status: 'confirmed',approval_status: 'approved',confirmed_by: authContext.userId });
     if (claimed.length !== 1) return { status: 409,payload: { success: false,message: 'این کارت قبلاً تأیید یا پردازش شده است.' } };
     const executed: any[] = [];
     try {
-      for (const index of selectedIndexes) {
-        executed.push(await executeAiProcessOperation(supabaseUrl, serviceRoleKey, authContext, pageContext, operations[index], processContext, orgPeopleContext));
+      for (const operation of selectedOperations) {
+        executed.push(await executeAiProcessOperation(supabaseUrl, serviceRoleKey, authContext, pageContext, operation, processContext, orgPeopleContext));
         await restPatch(supabaseUrl,serviceRoleKey,'ai_action_logs',{ id: `eq.${actionLogId}`,org_id: `eq.${authContext.orgId}` },{
           result_payload: { operations: executed,...processOperationReceipt(executed) },
         });
@@ -18741,6 +18936,7 @@ Deno.serve(async (req: Request) => {
       return await handleRecordMutationFromPrompt(supabaseUrl, serviceRoleKey, authContext, body);
     }
     if (action === 'process_operation_from_prompt') return await handleProcessOperationFromPrompt(supabaseUrl, serviceRoleKey, authContext, body);
+    if (action === 'process_approval_template_options') return await handleProcessApprovalTemplateOptions(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'workflow_ai_prompt') {
       const outputMode = String(body?.outputMode || body?.output_mode || '').trim();
       if (outputMode === 'create_record' || outputMode === 'update_record') {

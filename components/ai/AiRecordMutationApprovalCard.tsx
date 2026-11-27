@@ -17,6 +17,7 @@ export type AiRecordMutationDraft = {
   original?: Record<string, any>;
   fields: Record<string, any>;
   tables?: Record<string, any[]>;
+  editedTableKeys?: string[];
 };
 
 type Props = {
@@ -183,7 +184,8 @@ const AiRecordMutationApprovalCard: React.FC<Props> = ({
                             canEditModule={!disabled}
                             canViewField={(fieldKey: string) => allowedColumns.has(String(fieldKey || '').trim())}
                             onChange={(nextRows: any[]) => onChange(records.map((item, index) => index === recordIndex
-                              ? { ...item, tables: { ...(item.tables || {}), [table.key]: nextRows } }
+                              ? { ...item, tables: { ...(item.tables || {}), [table.key]: nextRows },
+                                editedTableKeys: Array.from(new Set([...(item.editedTableKeys || []), table.key])) }
                               : item))}
                           />
                         </div>
