@@ -135,24 +135,28 @@ export const SectionHeading: React.FC<{
   text?: string;
   invert?: boolean;
   align?: 'center' | 'start';
-}> = ({ eyebrow, title, text, invert = false, align = 'center' }) => (
-  <Reveal
-    className={`site-heading site-heading--${align} mb-12 max-w-3xl ${align === 'center' ? 'mx-auto text-center' : 'text-right'}`}
-  >
-    {eyebrow && (
-      <div
-        className="text-sm font-black"
-        style={{ color: invert ? 'rgb(var(--brand-300-rgb))' : 'rgb(var(--brand-600-rgb))' }}
-      >
-        {eyebrow}
-      </div>
-    )}
-    <h2 className={`mt-3 text-3xl font-black leading-[1.35] tracking-[-0.025em] md:text-4xl ${invert ? 'text-white' : 'text-zinc-950'}`}>
-      {title}
-    </h2>
-    {text && <p className={`mt-4 text-base leading-8 ${invert ? 'text-zinc-300' : 'text-zinc-600'}`}>{text}</p>}
-  </Reveal>
-);
+  headingLevel?: 'h1' | 'h2';
+}> = ({ eyebrow, title, text, invert = false, align = 'center', headingLevel = 'h2' }) => {
+  const HeadingTag = headingLevel;
+  return (
+    <Reveal
+      className={`site-heading site-heading--${align} mb-12 max-w-3xl ${align === 'center' ? 'mx-auto text-center' : 'text-right'}`}
+    >
+      {eyebrow && (
+        <div
+          className="text-sm font-black"
+          style={{ color: invert ? 'rgb(var(--brand-300-rgb))' : 'rgb(var(--brand-600-rgb))' }}
+        >
+          {eyebrow}
+        </div>
+      )}
+      <HeadingTag className={`mt-3 text-3xl font-black leading-[1.35] tracking-[-0.025em] md:text-4xl ${invert ? 'text-white' : 'text-zinc-950'}`}>
+        {title}
+      </HeadingTag>
+      {text && <p className={`mt-4 text-base leading-8 ${invert ? 'text-zinc-300' : 'text-zinc-600'}`}>{text}</p>}
+    </Reveal>
+  );
+};
 
 // ──────────────────────────────────────────────────
 // BrandButton: دکمه CTA برند‌محور

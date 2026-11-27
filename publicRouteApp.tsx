@@ -2,7 +2,7 @@ import AppFeedbackHost from "./components/feedback/AppFeedbackHost";
 import { FEEDBACK_ANTD_CONFIG } from './utils/feedbackPolicy';
 import { Suspense, lazy, useEffect } from "react";
 import { createRoot } from "react-dom/client";
-import { HelmetProvider } from "react-helmet-async";
+import { Helmet, HelmetProvider } from "react-helmet-async";
 import { BrowserRouter, Route, Routes, useLocation } from "react-router-dom";
 import ConfigProvider from "antd/es/config-provider";
 import AntdApp from "antd/es/app";
@@ -10,6 +10,7 @@ import faIR from "antd/locale/fa_IR";
 import { JalaliLocaleListener } from "antd-jalali";
 import { trackPageView } from "./utils/analytics";
 import BrandLoadingScreen from './components/common/BrandLoadingScreen';
+import { isMarketingHost } from './utils/hostRouting';
 
 const loadInquiryForm = () => import("./pages/InquiryForm");
 const loadInvoicePublicPage = () => import("./pages/InvoicePublicPage");
@@ -31,12 +32,17 @@ const LazyRouteBoundary: React.FC<{ children: React.ReactNode }> = ({ children }
 
 const RouteTracker: React.FC = () => {
   const location = useLocation();
+  const isTenantSiteRoute = location.pathname.startsWith('/site/') && isMarketingHost();
 
   useEffect(() => {
     trackPageView(location.pathname + location.search);
   }, [location.pathname, location.search]);
 
-  return null;
+  return isTenantSiteRoute ? null : (
+    <Helmet>
+      <meta name="robots" content="noindex, nofollow" />
+    </Helmet>
+  );
 };
 
 const PublicRouteApp: React.FC = () => {

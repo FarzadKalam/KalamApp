@@ -250,7 +250,7 @@ export function buildHomeSeo(): SeoProps {
   return {
     title: `${SITE_NAME} | CRM و ERP ایرانی یکپارچه با هوش مصنوعی و شبکه‌های اجتماعی`,
     description: SITE_DESCRIPTION,
-    canonical: SITE_URL,
+    canonical: `${SITE_URL}/`,
     ogImage: DEFAULT_OG_IMAGE,
     ogType: 'website',
     jsonLd: [generateOrganizationJsonLd(), generateWebSiteJsonLd(), generateWebApplicationJsonLd()],

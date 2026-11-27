@@ -1,6 +1,6 @@
 import PlanFeatureBoundary from './components/saas/PlanFeatureBoundary';
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { HelmetProvider } from "react-helmet-async";
+import { Helmet, HelmetProvider } from "react-helmet-async";
 import { createRoot } from "react-dom/client";
 import { focusManager } from "@tanstack/react-query";
 import { Refine, Authenticated } from "@refinedev/core";
@@ -368,6 +368,9 @@ const AuthenticatedOutletBoundary: React.FC = () => {
 // wizard while its provisioning request is still running.
 const SaasOnboardingHostApp: React.FC = () => (
   <HelmetProvider>
+    <Helmet>
+      <meta name="robots" content="noindex, nofollow" />
+    </Helmet>
     <BrowserRouter>
       <ConfigProvider direction="rtl" locale={faIR} theme={{ token: { fontFamily: "Peyda, Tahoma, Arial, sans-serif" } }}>
         <AntdApp message={{ top: 72, duration: 3.5, maxCount: 4 }} notification={{ placement: "topLeft", duration: 4.5, maxCount: 4 }}>
@@ -982,6 +985,9 @@ function App() {
 
   return (
     <HelmetProvider>
+    <Helmet>
+      <meta name="robots" content="noindex, nofollow" />
+    </Helmet>
     {/*
       Navigation is intentionally synchronous (no v7_startTransition).
       With startTransition, React Router defers committing the new route and

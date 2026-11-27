@@ -11,10 +11,19 @@ const STATIC_PAGES = [
   { url: '/updates', priority: '0.7', changefreq: 'weekly' },
   { url: '/about', priority: '0.6', changefreq: 'monthly' },
   { url: '/contact', priority: '0.5', changefreq: 'monthly' },
+  { url: '/solutions', priority: '0.9', changefreq: 'weekly' },
+  { url: '/solutions/report-builder', priority: '0.9', changefreq: 'monthly' },
   { url: '/solutions/ai-crm', priority: '0.9', changefreq: 'monthly' },
   { url: '/solutions/instagram-crm', priority: '0.9', changefreq: 'monthly' },
   { url: '/solutions/smart-instagram-direct', priority: '0.9', changefreq: 'monthly' },
   { url: '/solutions/affordable-business-ai', priority: '0.9', changefreq: 'monthly' },
+  { url: '/solutions/process-automation', priority: '0.9', changefreq: 'monthly' },
+  { url: '/solutions/accounting-moadian', priority: '0.9', changefreq: 'monthly' },
+  { url: '/solutions/hr-kpi-commission', priority: '0.9', changefreq: 'monthly' },
+  { url: '/solutions/project-management', priority: '0.9', changefreq: 'monthly' },
+  { url: '/solutions/voip-call-center', priority: '0.9', changefreq: 'monthly' },
+  { url: '/solutions/messaging-bots', priority: '0.9', changefreq: 'monthly' },
+  { url: '/solutions/mcp-ai-connectors', priority: '0.9', changefreq: 'monthly' },
 ];
 
 Deno.serve(async (req: Request) => {

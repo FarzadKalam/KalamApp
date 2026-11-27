@@ -1,5 +1,37 @@
 # راهنمای زنده SEO و معرفی تازه سیستم به گوگل
 
+### صفحهٔ جامع راهکارها (`/solutions`)، ۸ صفحهٔ راهکار جدید و غیرفعال‌سازی سکشن شبانه‌روزی (`3.32.0`) — ۲۰۲۶-۱۱-۲۸
+
+- **تغییرات عمومی و سئو (تجمیع‌شده در نسخهٔ `3.32.0`):**
+  - کاتالوگ مشترک ۱۲ راهکار در `shared/publicSolutions.mjs` و صفحهٔ فهرست `/solutions` در `pages/PublicSite.tsx` (همراه با لینک در منوی بالای سایت، فوتر و بخش `SolutionsOverview`) ایجاد شد.
+  - ۸ صفحهٔ راهکار جدید شامل `/solutions/report-builder` (سیستم گزارش‌ساز و داشبورد مدیریتی)، `/solutions/process-automation`، `/solutions/accounting-moadian`، `/solutions/hr-kpi-commission`، `/solutions/project-management`، `/solutions/voip-call-center`، `/solutions/messaging-bots` و `/solutions/mcp-ai-connectors` در کاتالوگ مشترک، `shared/publicSiteSeo.mjs`، `scripts/generate-public-seo.mjs` (با `FAQPage` JSON-LD و لینک‌های مرتبط)، `public/llms.txt` و `supabase/functions/sitemap/index.ts` اضافه شدند.
+  - رندر `PublicNightShiftShowcase` در `components/publicSite/sections/sectionsB.tsx` به‌صورت موقت از سایت عمومی غیرفعال شد.
+  - پیش‌نویس کامل بازنویسی مقالهٔ گزارش‌ساز با ۴ مثال واقعی در `docs/articles/report-builder-for-better-decisions.md` همراه با دو تصویر اختصاصی تازه (`public/assets/cms/blog/report-builder-excel-to-system.jpg` و `public/assets/cms/blog/report-builder-team-meeting.jpg`) آماده شد.
+- **شواهد بررسی محلی:**
+  - `npx tsc --noEmit` با کد خروج `0` عبور کرد؛ آزمون‌های `scripts/preserve-public-seo.test.mjs` و `scripts/public-brand-seo.test.mjs` (۵/۵، شامل بررسی تولید `solutions.html` و همهٔ ۱۲ صفحهٔ `solutions/*.html` و `FAQPage`) و `utils/productSiteSeoChecklist.test.ts` + `utils/hostRouting.test.ts` (۴/۴) با موفقیت پاس شدند.
+  - `deno` در محیط محلی نصب نبود و `npm run build` به‌دلیل محدودیت حافظهٔ مجازی ویندوز (`errno=1455`) در CI/CD گیت‌هاب و استقرار تابع `sitemap` پیگیری خواهد شد.
+- **اقدام بعدی:** پس از تأیید استقرار فرانت‌اند و انتشار تابع Edge `sitemap`، بررسی زندهٔ `/solutions`، `/solutions/report-builder` و `https://tazesystem.ir/sitemap.xml`، درخواست ایندکس در Search Console و اعمال `noindex` روی vhost زیردامنهٔ `mehrbanoo.tazesystem.ir`.
+
+### تحلیل گزارش Search Console و رفع ایرادهای فنی سئو (`3.30.1`) — ۲۰۲۶-۱۱-۲۷
+
+- **خلاصهٔ گزارش واقعی Search Console (`2026-10-25` تا `2026-11-25`):**
+  - کل عملکرد ثبت‌شده: **۸ کلیک** و **۶۹ ایمپرشن** (۶۵ ایران با رتبهٔ میانگین `26.32`، ۴ آمریکا؛ موبایل ۵ کلیک / ۳۸ ایمپرشن / رتبه `11.92`، دسکتاپ ۳ کلیک / ۳۱ ایمپرشن / رتبه `40.71`).
+  - نشت ترافیک زیردامنهٔ مشتری: `https://mehrbanoo.tazesystem.ir/` به‌تنهایی **۴ کلیک و ۳۲ ایمپرشن** (رتبهٔ میانگین `5.19`) داشته است. در بررسی زندهٔ HTTP مشخص شد این زیردامنه هدر `X-Robots-Tag: noindex, nofollow` ندارد و `/robots.txt` آن HTML برنامه را برمی‌گرداند.
+  - عملکرد صفحات و کوئری‌های اصلی `tazesystem.ir`: صفحهٔ نخست `https://tazesystem.ir/` (`3` کلیک، `5` ایمپرشن، رتبهٔ `1`)، `/solutions/instagram-crm` (`1` کلیک، `5` ایمپرشن، رتبهٔ `10.2`)، `/solutions/smart-instagram-direct` (`20` ایمپرشن، رتبهٔ `57.85`)، `/blog/report-builder-for-better-decisions` (`6` ایمپرشن، رتبهٔ `46.83` روی کوئری‌های `سیستم گزارش ساز` و `گزارش ساز`).
+  - در `sitemap.xml` زنده، آخرین `lastmod` پست‌های بلاگ `2026-10-13` (۳ پست) و آموزش‌ها `2026-10-17` (۱۴ آموزش) است و مقالهٔ آمادهٔ `docs/articles/smart-instagram-direct-crm.md` هنوز در CMS منتشر نشده است.
+- **اصلاحات کدی انجام‌شده در نسخهٔ `3.30.1`:**
+  - رفع باگ double-escape شدن تگ‌های HTML بلاگ در `shared/publicSiteSeo.mjs` و `scripts/generate-public-seo.mjs` (تغییر رندر بلوک‌های rich-text از `escapeHtml` خام به پاک‌سازی امن `sanitizeCmsHtml` تا تگ‌های `<p>` و پیوندهای داخلی `<a href>` به‌صورت `&lt;p&gt;` چاپ نشوند).
+  - متمرکزسازی فهرست متادیتای صفحات ایستا در `shared/publicSiteSeo.mjs` و افزودن `<SeoHead>` و `<h1>` یکتا به صفحات `/features`، `/pricing`، `/updates`، `/contact`، `/demo`، `/about`، `/privacy`، `/terms`، `/rules` و `/sla` در `pages/PublicSite.tsx` و `components/publicSite/shared/PricingSection.tsx`؛ یکسان‌سازی `canonical` صفحهٔ نخست روی `https://tazesystem.ir/` در `utils/seoHelpers.ts` و `scripts/generate-public-seo.mjs`.
+  - انتقال `RECENT_PRODUCT_UPDATES` به `shared/publicProductUpdates.mjs` تا صفحهٔ تولیدی `dist/seo-pages/updates.html` نیز شامل متن واقعی تازه‌های محصول باشد.
+  - حضور نام برند «تازه سیستم» در `<h1>` و `eyebrow` هیروی پیش‌فرض صفحهٔ اصلی (`components/publicSite/defaultLandingConfig.ts`) و تکمیل اطلاعات تماس و املای فارسی در `shared/publicBrandSeo.mjs`.
+  - افزودن متاتگ دفاعی `noindex, nofollow` در `App.tsx` و `publicRouteApp.tsx` برای میزبان‌های غیربازاریابی/پنل/tenant و افزودن الگوی مسدودسازی `/robots.txt` زیردامنه‌های غیرعمومی در `ops/nginx/tazesystem-seo-locations.conf`.
+- **شواهد بررسی محلی:**
+  - `npx tsc --noEmit` بدون خطا عبور کرد؛ `scripts/preserve-public-seo.test.mjs` و `scripts/public-brand-seo.test.mjs` (۵/۵ آزمون)، `utils/productSiteSeoChecklist.test.ts` (۳/۳) و `utils/hostRouting.test.ts` (۱/۱) با موفقیت پاس شدند.
+  - اجرای کامل `npm run build` روی این دستگاه به‌دلیل محدودیت حافظهٔ مجازی/صفحه‌بندی ویندوز (`VirtualAlloc failed with errno=1455` در مرحلهٔ minification با esbuild) کامل نشد؛ ساخت و کنترل کامل بسته در GitHub Actions (`ci-cd.yml`) انجام خواهد شد.
+- **اقدام بعدی:**
+  - افزودن هدر `X-Robots-Tag: noindex, nofollow` و مسدودسازی `/robots.txt` روی vhost زیردامنهٔ `mehrbanoo.tazesystem.ir` (و ثبت درخواست حذف موقت آن در Search Console -> Removals).
+  - پس از تأیید انتشار و اجرای CI/CD، بررسی زندهٔ `https://tazesystem.ir/blog/report-builder-for-better-decisions` (نبود `&lt;p&gt;`) و `https://tazesystem.ir/updates` روی دامنهٔ واقعی، دریافت لینک‌های رسمی شبکه‌های اجتماعی برای `sameAs`، ساخت `/solutions/report-builder` و انتشار مقالات جدید بلاگ.
+
 ### ویرایش پیشنهادهای دستیار پیش از تأیید — ۲۰۲۶-۱۱-۲۷
 
 - نسخهٔ `3.30.0` با کامیت `9e491e99` منتشر شد. بیلد و تست مرورگر در [GitHub Actions](https://github.com/FarzadKalam/KalamApp/actions/runs/46056729280) موفق بودند. پس از خطای انتقال کارگزار، همان بسته با بررسی SHA-256 روی سرور فعال شد.

@@ -7,9 +7,24 @@ export function publicOrganizationSchema() {
     '@type': 'Organization',
     '@id': `${PUBLIC_SITE_URL}/#organization`,
     name: PUBLIC_SITE_NAME,
-    alternateName: ['تازه‌سیستم', 'TazeSystem', 'Taze System', 'نرم افزار تازه سیستم', 'سامانه ابری تازه سیستم'],
+    alternateName: [
+      'تازه‌سیستم',
+      'TazeSystem',
+      'Taze System',
+      'نرم افزار تازه سیستم',
+      'نرم‌افزار تازه سیستم',
+      'سامانه ابری تازه سیستم',
+    ],
     url: `${PUBLIC_SITE_URL}/`,
     logo: `${PUBLIC_SITE_URL}/logo.png`,
+    description: 'نرم‌افزار یکپارچه ابری برای مدیریت مشتریان، CRM هوشمند، دایرکت اینستاگرام، حسابداری، پروژه، فرآیند و منابع انسانی.',
+    email: 'hello@tazesystem.ir',
+    contactPoint: {
+      '@type': 'ContactPoint',
+      email: 'hello@tazesystem.ir',
+      contactType: 'customer support',
+      availableLanguage: ['Persian', 'fa'],
+    },
   };
 }
 
@@ -19,7 +34,7 @@ export function publicWebsiteSchema() {
     '@type': 'WebSite',
     '@id': `${PUBLIC_SITE_URL}/#website`,
     name: PUBLIC_SITE_NAME,
-    alternateName: ['تازه‌سیستم', 'TazeSystem', 'Taze System', 'نرم افزار تازه سیستم'],
+    alternateName: ['تازه‌سیستم', 'TazeSystem', 'Taze System', 'نرم افزار تازه سیستم', 'نرم‌افزار تازه سیستم'],
     url: `${PUBLIC_SITE_URL}/`,
     inLanguage: 'fa-IR',
     publisher: { '@id': `${PUBLIC_SITE_URL}/#organization` },
@@ -32,7 +47,7 @@ export function publicWebApplicationSchema() {
     '@type': 'WebApplication',
     '@id': `${PUBLIC_SITE_URL}/#webapp`,
     name: PUBLIC_SITE_NAME,
-    alternateName: ['تازه‌سیستم', 'TazeSystem', 'Taze System', 'نرم افزار تازه سیستم'],
+    alternateName: ['تازه‌سیستم', 'TazeSystem', 'Taze System', 'نرم افزار تازه سیستم', 'نرم‌افزار تازه سیستم'],
     url: `${PUBLIC_SITE_URL}/`,
     applicationCategory: 'BusinessApplication',
     operatingSystem: 'All',

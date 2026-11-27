@@ -7,6 +7,8 @@
 ## بخش‌های اصلی سایت
 
 - [صفحه اصلی](https://tazesystem.ir/) — معرفی محصول، امکانات و تعرفه‌ها
+- [راهکارها](https://tazesystem.ir/solutions) — راهکارهای تخصصی CRM، سیستم گزارش‌ساز، دایرکت هوشمند، فرآیند، مالی و هوش مصنوعی
+- [سیستم گزارش‌ساز](https://tazesystem.ir/solutions/report-builder) — گزارش‌ساز آنلاین و داشبورد مدیریتی بدون اکسل
 - [امکانات](https://tazesystem.ir/features) — فهرست کامل قابلیت‌های سیستم
 - [تعرفه‌ها](https://tazesystem.ir/pricing) — پلن‌ها و قیمت‌گذاری
 - [بلاگ](https://tazesystem.ir/blog) — مقالات تخصصی مدیریت، حسابداری، HR و فناوری

@@ -5,6 +5,8 @@ import { supabase } from '../../../supabaseClient';
 import { sitePath, DEMO_URL } from '../siteLinks';
 import { SectionHeading } from '../primitives';
 import { parseSaasPlanDisplayFeatures } from '../../../utils/saasPlanDisplayFeatures';
+import SeoHead from '../../cms/SeoHead';
+import { getStaticPublicPageSeo } from '../../../shared/publicSiteSeo.mjs';
 
 type PublicPlan = {
   id: string;
@@ -69,8 +71,9 @@ export const PricingSection: React.FC<{
 
   return (
     <section className="bg-white px-5 py-20">
+      {detailed && <SeoHead {...getStaticPublicPageSeo('/pricing')} />}
       <div className="mx-auto max-w-7xl">
-        <SectionHeading eyebrow={eyebrow} title={title} text={text} />
+        <SectionHeading eyebrow={eyebrow} title={title} text={text} headingLevel={detailed ? 'h1' : 'h2'} />
 
         {!loaded ? (
           <div className="grid gap-5 lg:grid-cols-3">

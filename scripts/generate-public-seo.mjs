@@ -2,104 +2,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { PUBLIC_SITE_URL, publicOrganizationSchema, publicWebsiteSchema, publicWebApplicationSchema } from '../shared/publicBrandSeo.mjs';
 import { ECOSYSTEM_STATUS_LABELS, PUBLIC_ECOSYSTEM_GROUPS } from '../shared/publicEcosystem.mjs';
+import { PUBLIC_STATIC_SEO_PAGES, escapeHtml, renderContentBlock } from '../shared/publicSiteSeo.mjs';
+import { RECENT_PRODUCT_UPDATES } from '../shared/publicProductUpdates.mjs';
 
 const root = process.cwd();
 const distDir = path.join(root, 'dist');
 const templatePath = path.join(distDir, 'index.html');
 const outputDir = path.join(distDir, 'seo-pages');
 const siteUrl = PUBLIC_SITE_URL;
-
-const pages = [
-  {
-    path: '/', file: 'home.html',
-    title: 'تازه سیستم | CRM و ERP ایرانی یکپارچه با هوش مصنوعی و شبکه‌های اجتماعی',
-    description: 'نرم‌افزار تازه سیستم؛ پلتفرم یکپارچه ابری برای مدیریت مشتریان، CRM ایرانی هوشمند، دایرکت اینستاگرام، حسابداری، پروژه و منابع انسانی.',
-    heading: 'نرم‌افزار یکپارچه تازه سیستم؛ CRM ایرانی هوشمند و مدیریت کسب‌وکار',
-    body: 'نرم‌افزار تازه سیستم امکان مدیریت یکپارچه فروش، دایرکت هوشمند اینستاگرام، حسابداری، پروژه‌ها، فرآیندها، منابع انسانی و هوش مصنوعی کسب‌وکار را در یک فضای ابری فراهم می‌کند.',
-    image: `${siteUrl}/logo.png`,
-  },
-  {
-    path: '/features', file: 'features.html',
-    title: 'امکانات تازه سیستم | CRM، ERP و اتوماسیون سازمانی',
-    description: 'امکانات تازه سیستم برای مدیریت مشتریان، فروش، پروژه‌ها، فرآیندها، حسابداری، منابع انسانی، گزارش‌گیری و هوش مصنوعی را ببینید.',
-    heading: 'امکانات یکپارچه برای مدیریت عملیات سازمان',
-    body: 'از CRM و اتوماسیون فروش تا مدیریت پروژه، حسابداری، منابع انسانی، گزارش‌ساز و دستیار هوشمند در یک سامانه در دسترس است.',
-  },
-  {
-    path: '/pricing', file: 'pricing.html',
-    title: 'تعرفه‌های تازه سیستم | انتخاب پلن مناسب کسب‌وکار',
-    description: 'پلن‌ها و تعرفه‌های تازه سیستم را مقایسه کنید و متناسب با اندازه تیم و نیازهای کسب‌وکار، فضای کاری مناسب را انتخاب کنید.',
-    heading: 'پلن مناسب برای هر مرحله از رشد کسب‌وکار',
-    body: 'امکانات هر پلن را مقایسه کنید و بر اساس تعداد کاربران، ماژول‌های موردنیاز و سطح خدمات، انتخاب مناسبی داشته باشید.',
-  },
-  {
-    path: '/blog', file: 'blog.html',
-    title: 'بلاگ تازه سیستم | مدیریت، فروش و تحول دیجیتال',
-    description: 'مقاله‌های کاربردی تازه سیستم درباره مدیریت کسب‌وکار، CRM، فروش، پروژه، فرآیند، منابع انسانی و هوش مصنوعی.',
-    heading: 'مقاله‌های کاربردی برای مدیران و تیم‌های در حال رشد',
-    body: 'تجربه‌ها و راهکارهای عملی برای منظم‌تر کردن فروش، عملیات، پروژه‌ها و تصمیم‌گیری مدیریتی را بخوانید.',
-  },
-  {
-    path: '/learn', file: 'learn.html',
-    title: 'آموزش تازه سیستم | راهنمای تصویری استفاده از نرم‌افزار',
-    description: 'آموزش‌های تصویری و مرحله‌به‌مرحله تازه سیستم برای راه‌اندازی و استفاده از مشتریان، فروش، پروژه‌ها، فرآیندها و سایر بخش‌ها.',
-    heading: 'آموزش‌های مرحله‌به‌مرحله تازه سیستم',
-    body: 'با راهنماهای متنی و تصویری، بخش‌های مختلف سامانه را سریع‌تر راه‌اندازی کنید و از امکانات آن در کار واقعی بهره ببرید.',
-  },
-  {
-    path: '/updates', file: 'updates.html',
-    title: 'تازه‌های محصول | قابلیت‌های جدید تازه سیستم',
-    description: 'جدیدترین قابلیت‌ها و تغییرات محصول تازه سیستم را دنبال کنید و با امکانات تازه سامانه آشنا شوید.',
-    heading: 'تازه‌های محصول تازه سیستم',
-    body: 'قابلیت‌های جدید سامانه و اثر آن‌ها بر تجربه مدیریت کسب‌وکار در این صفحه معرفی می‌شوند.',
-  },
-  {
-    path: '/about', file: 'about.html',
-    title: 'درباره تازه سیستم | سامانه یکپارچه مدیریت کسب‌وکار',
-    description: 'با مأموریت تازه سیستم برای ساده‌تر و یکپارچه‌تر کردن مدیریت کسب‌وکارهای ایرانی آشنا شوید.',
-    heading: 'درباره تازه سیستم',
-    body: 'تازه سیستم برای یکپارچه کردن اطلاعات و فرآیندهای کسب‌وکار و کمک به تصمیم‌گیری دقیق‌تر مدیران ساخته شده است.',
-  },
-  {
-    path: '/contact', file: 'contact.html',
-    title: 'تماس با تازه سیستم | درخواست دمو و مشاوره',
-    description: 'برای دریافت دمو، مشاوره انتخاب پلن، همکاری یا پشتیبانی با تیم تازه سیستم در ارتباط باشید.',
-    heading: 'تماس با تازه سیستم',
-    body: 'برای دریافت دمو و بررسی نیازهای کسب‌وکار خود، درخواستتان را ثبت کنید تا تیم تازه سیستم با شما تماس بگیرد.',
-  },
-  {
-    path: '/solutions/ai-crm', file: 'solutions/ai-crm.html',
-    title: 'CRM ایرانی دارای هوش مصنوعی | تازه سیستم',
-    description: 'CRM ایرانی دارای هوش مصنوعی برای مدیریت مشتریان، سرنخ‌ها، پیگیری فروش، پیشنهاد پاسخ، تحلیل اطلاعات و گردش‌کار در یک سامانه یکپارچه.',
-    heading: 'CRM ایرانی دارای هوش مصنوعی',
-    body: 'مدیریت مشتریان و لیدها، پیگیری فروش، پیشنهاد پاسخ هوشمند، تحلیل اطلاعات و اتصال فرآیند فروش به فعالیت، فاکتور و گزارش مدیریتی.',
-  },
-  {
-    path: '/solutions/instagram-crm', file: 'solutions/instagram-crm.html',
-    title: 'CRM با دایرکت هوشمند اینستاگرام | تازه سیستم',
-    description: 'CRM با دایرکت هوشمند اینستاگرام برای مدیریت دایرکت و کامنت، ثبت لید، پاسخ‌گویی خودکار و ادامه پیگیری مشتری در فرآیند فروش.',
-    heading: 'CRM متصل به دایرکت هوشمند اینستاگرام',
-    body: 'گفتگو، کامنت و پاسخ استوری را به لید قابل پیگیری تبدیل کنید و ادامه ارتباط مشتری را در CRM، فعالیت‌ها و کمپین‌ها نگه دارید.',
-  },
-  {
-    path: '/solutions/smart-instagram-direct', file: 'solutions/smart-instagram-direct.html',
-    title: 'دایرکت هوشمند اینستاگرام متصل به CRM و فروش | تازه سیستم',
-    description: 'نرم‌افزار دایرکت هوشمند اینستاگرام متصل به CRM تازه سیستم؛ پاسخ‌گویی خودکار با هوش مصنوعی، تبدیل کامنت به لید فروش، صدور فاکتور و ارجاع به اپراتور.',
-    heading: 'دایرکت هوشمند اینستاگرام متصل به CRM؛ حرفه‌ای و اقتصادی',
-    body: 'نرم‌افزار دایرکت هوشمند اینستاگرام تازه سیستم، پیام‌ها، کامنت‌ها و استوری‌ها را به لید فروش تبدیل می‌کند؛ پاسخ‌گویی با هوش مصنوعی، صدور فاکتور پرداخت و اتصال به انبار و باشگاه مشتریان در یک سامانه ابری یکپارچه.',
-  },
-  {
-    path: '/solutions/affordable-business-ai', file: 'solutions/affordable-business-ai.html',
-    title: 'هوش مصنوعی اقتصادی برای کسب‌وکارها | تازه سیستم',
-    description: 'هوش مصنوعی اقتصادی برای کسب‌وکارها؛ تحلیل فایل و صوت، گزارش مدیریتی، پیشنهاد پاسخ و ساخت رکورد با کنترل مصرف و تأیید کاربر.',
-    heading: 'هوش مصنوعی اقتصادی و کاربردی برای کسب‌وکارها',
-    body: 'مصرف هوش مصنوعی را کنترل کنید و از آن برای خلاصه‌سازی، پاسخ‌گویی، تحلیل گزارش و آماده‌سازی رکوردهای کاری استفاده کنید.',
-  },
-];
-
-const escapeHtml = (value) => String(value)
-  .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
-  .replaceAll('"', '&quot;').replaceAll("'", '&#39;');
 
 const readBuildEnv = () => {
   const env = { ...process.env };
@@ -115,33 +25,52 @@ const readBuildEnv = () => {
   return env;
 };
 
-const renderContentBlock = (block) => {
-  if (!block || typeof block !== 'object') return '';
-  if (block.type === 'heading') {
-    const level = Math.min(4, Math.max(2, Number(block.level) || 2));
-    return `<h${level}>${escapeHtml(block.content || '')}</h${level}>`;
-  }
-  if (block.type === 'paragraph') return `<p>${escapeHtml(block.content || '')}</p>`;
-  if (block.type === 'quote') return `<blockquote>${escapeHtml(block.content || '')}</blockquote>`;
-  if (block.type === 'image' && block.url) {
-    return `<figure><img src="${escapeHtml(block.url)}" alt="${escapeHtml(block.alt || block.caption || '')}" loading="lazy" />${block.caption ? `<figcaption>${escapeHtml(block.caption)}</figcaption>` : ''}</figure>`;
-  }
-  if ((block.type === 'list' || block.type === 'checklist') && Array.isArray(block.items)) {
-    return `<ul>${block.items.map((item) => `<li>${escapeHtml(typeof item === 'string' ? item : item?.text || item?.content || '')}</li>`).join('')}</ul>`;
-  }
-  return '';
+const renderUpdatesSectionHtml = () => {
+  const itemsHtml = RECENT_PRODUCT_UPDATES.map((item) => {
+    const detailsHtml = Array.isArray(item.details) && item.details.length
+      ? `<ul>${item.details.map((detail) => `<li>${escapeHtml(detail)}</li>`).join('')}</ul>`
+      : '';
+    return `<article><h2>${escapeHtml(item.title)} (نسخه ${escapeHtml(item.version)})</h2><p>${escapeHtml(item.summary)}</p>${detailsHtml}</article>`;
+  }).join('');
+  return `<section>${itemsHtml}</section>`;
 };
 
-const writeSeoPage = ({ file, title, description, canonical, heading, bodyHtml, schemaType = 'WebPage', image }) => {
+const renderEcosystemSectionHtml = () => (
+  `<section><h2>زیست‌بوم تازه سیستم</h2><p>پشتیبانی در محصول به معنی اتصال فعال همهٔ سازمان‌ها نیست؛ استفاده به پلن و تنظیمات سازمان بستگی دارد. موارد در حال توسعه هنوز قابل استفاده نیستند.</p>${PUBLIC_ECOSYSTEM_GROUPS.map((group) => `<h3>${escapeHtml(group.title)}</h3><ul>${group.items.map((item) => `<li>${escapeHtml(item.name)} — ${escapeHtml(ECOSYSTEM_STATUS_LABELS[item.status])}: ${escapeHtml(item.description)}</li>`).join('')}</ul>`).join('')}</section>`
+);
+
+const renderSolutionsIndexHtml = () => {
+  const itemsHtml = PUBLIC_STATIC_SEO_PAGES
+    .filter((page) => page.solution)
+    .map(({ path: href, solution }) => `<li><a href="${escapeHtml(href)}">${escapeHtml(solution.navLabel)}</a> — ${escapeHtml(solution.intro)}</li>`)
+    .join('');
+  return `<section><h2>همه راهکارهای تازه سیستم</h2><ul>${itemsHtml}</ul></section>`;
+};
+
+const renderSolutionDetailHtml = (solution) => {
+  const benefitsHtml = `<h2>امکانات و مزایا</h2><ul>${solution.benefits.map((b) => `<li>${escapeHtml(b)}</li>`).join('')}</ul>`;
+  const useCasesHtml = `<h2>کاربردهای واقعی</h2><ul>${solution.useCases.map((u) => `<li>${escapeHtml(u)}</li>`).join('')}</ul>`;
+  const relatedHtml = solution.relatedLinks?.length
+    ? `<h2>مطالب و آموزش‌های مرتبط</h2><ul>${solution.relatedLinks.map((l) => `<li><a href="${escapeHtml(l.to)}">${escapeHtml(l.label)}</a></li>`).join('')}</ul>`
+    : '';
+  const faqHtml = solution.faq?.length
+    ? `<section><h2>پرسش‌های پرتکرار</h2>${solution.faq.map((q) => `<h3>${escapeHtml(q.question)}</h3><p>${escapeHtml(q.answer)}</p>`).join('')}</section>`
+    : '';
+  return `${benefitsHtml}${useCasesHtml}${relatedHtml}${faqHtml}`;
+};
+
+const writeSeoPage = ({ file, title, description, canonical, heading, bodyHtml, schemaType = 'WebPage', image, extraJsonLd = [] }) => {
   const jsonLd = JSON.stringify({
     '@context': 'https://schema.org', '@type': schemaType, name: title, headline: heading,
     description, url: canonical, image: image || undefined,
-    isPartOf: file === 'home.html' ? { '@id': `${siteUrl}/#website` } : { '@type': 'WebSite', name: 'تازه سیستم', url: siteUrl }, inLanguage: 'fa-IR',
+    isPartOf: file === 'home.html' ? { '@id': `${siteUrl}/#website` } : { '@type': 'WebSite', name: 'تازه سیستم', url: `${siteUrl}/` }, inLanguage: 'fa-IR',
   }).replaceAll('<', '\\u003c');
   const brandJsonLd = file === 'home.html'
     ? [publicOrganizationSchema(), publicWebsiteSchema(), publicWebApplicationSchema()].map((schema) =>
       `<script data-rh="true" type="application/ld+json">${JSON.stringify(schema).replaceAll('<', '\\u003c')}</script>`)
     : [];
+  const additionalJsonLd = extraJsonLd.map((schema) =>
+    `<script data-rh="true" type="application/ld+json">${JSON.stringify(schema).replaceAll('<', '\\u003c')}</script>`);
   const head = [
     `<title data-rh="true">${escapeHtml(title)}</title>`,
     `<meta data-rh="true" name="description" content="${escapeHtml(description)}" />`,
@@ -156,8 +85,9 @@ const writeSeoPage = ({ file, title, description, canonical, heading, bodyHtml, 
     image ? `<meta data-rh="true" property="og:image" content="${escapeHtml(image)}" />` : '',
     `<script data-rh="true" type="application/ld+json">${jsonLd}</script>`,
     ...brandJsonLd,
+    ...additionalJsonLd,
   ].filter(Boolean).join('\n    ');
-  const fallback = `<main data-seo-fallback="true" dir="rtl"><article><h1>${escapeHtml(heading)}</h1>${bodyHtml}</article><nav aria-label="پیوندهای اصلی"><a href="/features">امکانات</a> <a href="/pricing">تعرفه‌ها</a> <a href="/learn">آموزش‌ها</a> <a href="/blog">بلاگ</a> <a href="/updates">تازه‌های محصول</a> <a href="/about">درباره تازه سیستم</a> <a href="/contact">تماس با ما</a></nav></main>`;
+  const fallback = `<main data-seo-fallback="true" dir="rtl"><article><h1>${escapeHtml(heading)}</h1>${bodyHtml}</article><nav aria-label="پیوندهای اصلی"><a href="/features">امکانات</a> <a href="/solutions">راهکارها</a> <a href="/pricing">تعرفه‌ها</a> <a href="/learn">آموزش‌ها</a> <a href="/blog">بلاگ</a> <a href="/updates">تازه‌های محصول</a> <a href="/about">درباره تازه سیستم</a> <a href="/contact">تماس با ما</a></nav></main>`;
   const html = template.replace(/<title>.*?<\/title>/s, head).replace('<div id="root"></div>', `<div id="root">${fallback}</div>`);
   const outputPath = path.join(outputDir, file);
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
@@ -171,10 +101,29 @@ if (!fs.existsSync(templatePath)) {
 const template = fs.readFileSync(templatePath, 'utf8');
 fs.mkdirSync(outputDir, { recursive: true });
 
-for (const page of pages) {
-  const canonical = `${siteUrl}${page.path === '/' ? '' : page.path}`;
-  const ecosystemHtml = page.path === '/' ? `<section><h2>زیست‌بوم تازه سیستم</h2><p>پشتیبانی در محصول به معنی اتصال فعال همهٔ سازمان‌ها نیست؛ استفاده به پلن و تنظیمات سازمان بستگی دارد. موارد در حال توسعه هنوز قابل استفاده نیستند.</p>${PUBLIC_ECOSYSTEM_GROUPS.map(group => `<h3>${escapeHtml(group.title)}</h3><ul>${group.items.map(item => `<li>${escapeHtml(item.name)} — ${escapeHtml(ECOSYSTEM_STATUS_LABELS[item.status])}: ${escapeHtml(item.description)}</li>`).join('')}</ul>`).join('')}</section>` : '';
-  writeSeoPage({ ...page, canonical, bodyHtml: `<p>${escapeHtml(page.body)}</p>${ecosystemHtml}` });
+for (const page of PUBLIC_STATIC_SEO_PAGES) {
+  const canonical = `${siteUrl}${page.path === '/' ? '/' : page.path}`;
+  const extraBodyHtml = page.path === '/'
+    ? `${renderEcosystemSectionHtml()}${renderSolutionsIndexHtml()}`
+    : page.path === '/updates'
+      ? renderUpdatesSectionHtml()
+      : page.path === '/solutions'
+        ? renderSolutionsIndexHtml()
+        : page.solution
+          ? renderSolutionDetailHtml(page.solution)
+          : '';
+  const extraJsonLd = page.solution?.faq?.length
+    ? [{
+      '@context': 'https://schema.org',
+      '@type': 'FAQPage',
+      mainEntity: page.solution.faq.map((item) => ({
+        '@type': 'Question',
+        name: item.question,
+        acceptedAnswer: { '@type': 'Answer', text: item.answer },
+      })),
+    }]
+    : [];
+  writeSeoPage({ ...page, canonical, bodyHtml: `<p>${escapeHtml(page.body)}</p>${extraBodyHtml}`, extraJsonLd });
 }
 
 let dynamicCount = 0;
@@ -215,4 +164,4 @@ if (supabaseUrl && anonKey) {
 
 fs.writeFileSync(path.join(distDir, 'seo-generation.json'), JSON.stringify({ dynamicComplete, dynamicCount }), 'utf8');
 
-console.log(`Generated ${pages.length} static and ${dynamicCount} dynamic crawlable HTML pages in dist/seo-pages.`);
+console.log(`Generated ${PUBLIC_STATIC_SEO_PAGES.length} static and ${dynamicCount} dynamic crawlable HTML pages in dist/seo-pages.`);
