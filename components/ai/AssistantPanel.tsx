@@ -3331,9 +3331,6 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     }
   }, [callAssistant, message, onThreadUpserted, sharedIdentityTokens, sharingThread, threadId]);
 
-  // Typing in the composer must not rebuild every rich message card.  Several
-  // cards contain media previews and markdown, so keeping this callback stable
-  // makes the compose box responsive even in long conversations.
   const deleteConversationMessage = useCallback(async (item: ChatMessage) => {
     if (!threadId || deletingMessageId || submitting) return;
     setDeletingMessageId(item.id);
@@ -3341,8 +3338,11 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       const result = await callAssistant({ action: 'delete_conversation_message', threadId, messageId: item.id });
       setMessages(current => current.filter(entry => entry.id !== item.id));
       const rejected = new Set<string>(result?.rejectedActionIds || []);
-      setPendingAiAction(current => current && (rejected.has(String(current.id)) ||
-        (current.actionType === 'agent_task_batch' && current.actions.some((action: any) => rejected.has(String(action.id))))) ? null : current);
+      setPendingAiAction((current: { id?: unknown; actionType?: string; actions?: Array<{ id?: unknown }> } | null) => {
+        const wasRejected = current && (rejected.has(String(current.id)) ||
+          (current.actionType === 'agent_task_batch' && current.actions?.some(action => rejected.has(String(action.id)))));
+        return wasRejected ? null : current;
+      });
       message.success('پیام حذف شد.');
     } catch (error) {
       message.error(toFaErrorMessage(error, 'حذف پیام انجام نشد.'));
@@ -3351,6 +3351,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     }
   }, [callAssistant, deletingMessageId, message, submitting, threadId]);
 
+  // Keep rich message cards stable while typing in the composer.
   const renderMessage = useCallback((item: ChatMessage, index: number) => {
     const isUser = item.role === 'user';
     const messageAuthor = item.metadata?.author && typeof item.metadata.author === 'object' ? item.metadata.author : null;
