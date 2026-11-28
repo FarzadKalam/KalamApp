@@ -1,42 +1,531 @@
 name: CI-CD
 
 on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
     inputs:
       deploy:
+        description: 'Publish this tested release'
         type: boolean
         default: false
       frontend_only:
+        description: 'Publish the frontend without applying migrations or deploying Edge Functions'
         type: boolean
-        default: true
+        default: false
+      woocommerce_connector_only:
+        description: 'Deploy just the WooCommerce Edge Function and verify its live response'
+        type: boolean
+        default: false
+      cash_bank_ledger_migration_only:
+        description: 'Apply only the approved phase 617 cash and bank ledger migration'
+        type: boolean
+        default: false
+      ai_calendar_release:
+        description: 'Publish the AI calendar and provider release with only phases 621 and 622'
+        type: boolean
+        default: false
+      ai_approval_release:
+        description: 'Publish the approvals frontend and AI assistant Edge Function without database migrations'
+        type: boolean
+        default: false
+      skip_browser_checks:
+        description: 'Skip browser and screenshot checks when explicitly requested by the release owner'
+        type: boolean
+        default: false
+
+concurrency:
+  group: kalamapp-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && inputs.deploy && 'deploy' || 'check' }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' || !inputs.deploy }}
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
-  isolated_release_build:
-    if: ${{ !inputs.deploy && inputs.frontend_only }}
+  ci:
+    if: ${{ !inputs.woocommerce_connector_only }}
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: ledger_test
+          POSTGRES_PASSWORD: isolated_test_only
+          POSTGRES_DB: ledger_test
+        options: >-
+          --health-cmd "pg_isready -U ledger_test -d ledger_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v4
+
+      - name: Isolated ledger SQL regression checks
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          for file in tests/sql/cash_bank_ledger_fixture.sql \
+            database_v1_phase568_cash_bank_filtered_totals_and_print.sql \
+            database_v1_phase568_cash_bank_filtered_totals_and_print.sql \
+            tests/sql/cash_bank_ledger_assertions.sql; do
+            docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d ledger_test -v ON_ERROR_STOP=1 < "$file"
+          done
+
+      - name: Isolated public content calendar regression checks
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          docker exec "$POSTGRES_CONTAINER" createdb -U ledger_test content_calendar_test
+          for file in tests/sql/content_calendar_public_fixture.sql \
+            database_v1_phase572_public_content_calendar_status_presentation.sql \
+            database_v1_phase572_public_content_calendar_status_presentation.sql \
+            tests/sql/content_calendar_public_assertions.sql; do
+            docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d content_calendar_test -v ON_ERROR_STOP=1 < "$file"
+          done
+
+      - name: SaaS workflow source isolation and invoice deduplication
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          docker exec "$POSTGRES_CONTAINER" createdb -U ledger_test saas_workflow_test
+          for file in tests/sql/saas_workflow_sources_fixture.sql \
+            database_v1_phase608_saas_workflow_sources_and_related_invoices.sql \
+            database_v1_phase608_saas_workflow_sources_and_related_invoices.sql \
+            tests/sql/saas_workflow_sources_assertions.sql; do
+            docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d saas_workflow_test -v ON_ERROR_STOP=1 < "$file"
+          done
+
+      - name: SaaS catalog, sales invoice checkout and support audience
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          docker exec "$POSTGRES_CONTAINER" createdb -U ledger_test saas_sales_test
+          for file in tests/sql/saas_workflow_sources_fixture.sql tests/sql/saas_sales_workflows_fixture.sql; do
+            docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d saas_sales_test -v ON_ERROR_STOP=1 < "$file"
+          done
+          sed -n '/^create or replace function public.activate_saas_order_items(/,/^end; \$\$;/p' database_v1_phase560_saas_trial_purchase_and_user_seats.sql |
+            docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d saas_sales_test -v ON_ERROR_STOP=1
+          for file in \
+            database_v1_phase608_saas_workflow_sources_and_related_invoices.sql \
+            database_v1_phase609_saas_sales_customer_and_catalog.sql \
+            database_v1_phase610_saas_invoice_account_delivery.sql \
+            database_v1_phase611_saas_workflow_support_delivery.sql \
+            database_v1_phase609_saas_sales_customer_and_catalog.sql \
+            database_v1_phase610_saas_invoice_account_delivery.sql \
+            database_v1_phase611_saas_workflow_support_delivery.sql; do
+            docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d saas_sales_test -v ON_ERROR_STOP=1 < "$file"
+          done
+          docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d saas_sales_test -v ON_ERROR_STOP=1 < tests/sql/saas_sales_workflows_assertions.sql
+
+      - name: Plan entitlements and full demo SQL regression checks
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          docker exec "$POSTGRES_CONTAINER" createdb -U ledger_test plan_entitlements_test
+          sed '/^create role /d' tests/sql/plan_entitlements_fixture.sql | docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d plan_entitlements_test -v ON_ERROR_STOP=1
+          for file in database_v1_phase584_agent_defaults_and_workflow_triggers.sql \
+            database_v1_phase584_agent_defaults_and_workflow_triggers.sql \
+            database_v1_phase585_plan_entitlements_and_full_demo.sql \
+            database_v1_phase585_plan_entitlements_and_full_demo.sql \
+            tests/sql/plan_entitlements_assertions.sql \
+            database_v1_phase586_feature_runtime_bindings.sql \
+            database_v1_phase586_feature_runtime_bindings.sql \
+            tests/sql/feature_runtime_assertions.sql; do
+            docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d plan_entitlements_test -v ON_ERROR_STOP=1 < "$file"
+          done
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
+
+      - name: Isolated AI usage and atomic process changes
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          docker exec "$POSTGRES_CONTAINER" createdb -U ledger_test ai_process_usage_test
+          for file in tests/sql/ai_process_usage_fixture.sql \
+            database_v1_phase591_ai_usage_complete_statistics.sql \
+            database_v1_phase591_ai_usage_complete_statistics.sql \
+            database_v1_phase592_ai_process_task_atomic_update.sql \
+            database_v1_phase592_ai_process_task_atomic_update.sql \
+            database_v1_phase593_ai_model_reasoning_defaults.sql \
+            database_v1_phase593_ai_model_reasoning_defaults.sql \
+            tests/sql/ai_process_usage_assertions.sql; do
+            docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d ai_process_usage_test -v ON_ERROR_STOP=1 < "$file"
+          done
+
+      - name: Cash and bank request context and optimized SQL checks
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          docker exec "$POSTGRES_CONTAINER" createdb -U ledger_test cash_bank_context_test
+          sed '/^create role /d' tests/sql/cash_bank_ledger_fixture.sql | docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d cash_bank_context_test -v ON_ERROR_STOP=1
+          for file in database_v1_phase568_cash_bank_filtered_totals_and_print.sql \
+            tests/sql/cash_bank_context_fixture.sql \
+            database_v1_phase582_cash_bank_context_performance.sql \
+            database_v1_phase582_cash_bank_context_performance.sql \
+            database_v1_phase583_internal_organization_lookup_index.sql \
+            database_v1_phase583_internal_organization_lookup_index.sql \
+            database_v1_phase617_cash_bank_ledger_cheque_lookup.sql \
+            database_v1_phase617_cash_bank_ledger_cheque_lookup.sql \
+            tests/sql/cash_bank_cheque_lookup_assertions.sql \
+            tests/sql/cash_bank_context_assertions.sql; do
+            docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d cash_bank_context_test -v ON_ERROR_STOP=1 < "$file"
+          done
+
+      - name: Isolated system message access regression checks
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          for file in tests/sql/system_note_guard_fixture.sql \
+            database_v1_phase569_system_note_recipient_guard.sql \
+            database_v1_phase569_system_note_recipient_guard.sql \
+            database_v1_phase570_system_inbox_recipient_guard.sql \
+            database_v1_phase570_system_inbox_recipient_guard.sql \
+            tests/sql/system_note_guard_assertions.sql \
+            tests/sql/system_note_sender_fixture.sql \
+            database_v1_phase571_system_note_sender_is_not_recipient.sql \
+            database_v1_phase571_system_note_sender_is_not_recipient.sql \
+            tests/sql/system_note_sender_assertions.sql; do
+            docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d ledger_test -v ON_ERROR_STOP=1 < "$file"
+          done
+
+      - name: Isolated conversational agent task queue checks
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          docker exec "$POSTGRES_CONTAINER" createdb -U ledger_test ai_agent_tasks_test
+          for file in tests/sql/ai_agent_tasks_fixture.sql \
+            database_v1_phase589_conversational_agent_tasks.sql \
+            database_v1_phase589_conversational_agent_tasks.sql \
+            database_v1_phase590_agent_tasks_legacy_scheduler_boundary.sql \
+            database_v1_phase590_agent_tasks_legacy_scheduler_boundary.sql \
+            tests/sql/ai_agent_tasks_assertions.sql; do
+            docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d ai_agent_tasks_test -v ON_ERROR_STOP=1 < "$file"
+          done
+
+      - name: Isolated commission receipts, review cases and stale concurrent posting
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          docker exec "$POSTGRES_CONTAINER" createdb -U ledger_test commission_collection_test
+          for file in tests/sql/commission_collection_fixture.sql \
+            database_v1_phase586_feature_runtime_bindings.sql \
+            database_v1_phase594_commission_posting_snapshot_guard.sql \
+            database_v1_phase594_commission_posting_snapshot_guard.sql \
+            database_v1_phase595_commission_cheque_review_cases.sql \
+            database_v1_phase595_commission_cheque_review_cases.sql \
+            tests/sql/commission_collection_assertions.sql; do
+            docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d commission_collection_test -v ON_ERROR_STOP=1 < "$file"
+          done
+          docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d commission_collection_test -v ON_ERROR_STOP=1 < tests/sql/commission_collection_concurrent_a.sql > /tmp/commission-worker-a.log 2>&1 &
+          worker_a=$!
+          ready=false
+          for attempt in $(seq 1 50); do
+            if [ "$(docker exec "$POSTGRES_CONTAINER" psql -U ledger_test -d commission_collection_test -Atc "select count(*) from pg_stat_activity where application_name='commission_concurrency_a' and wait_event='PgSleep'")" = "1" ]; then
+              ready=true
+              break
+            fi
+            sleep 0.1
+          done
+          if [ "$ready" != true ]; then cat /tmp/commission-worker-a.log; exit 1; fi
+          docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d commission_collection_test -v ON_ERROR_STOP=1 < tests/sql/commission_collection_concurrent_b.sql
+          wait "$worker_a"
+          cat /tmp/commission-worker-a.log
+
+      - name: AI unread completion, viewer isolation and central read cursors
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          docker exec "$POSTGRES_CONTAINER" createdb -U ledger_test ai_notifications_test
+          for file in tests/sql/ai_notifications_fixture.sql \
+            database_v1_phase604_ai_notification_read_cursors.sql \
+            database_v1_phase604_ai_notification_read_cursors.sql \
+            tests/sql/ai_notifications_assertions.sql; do
+            docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d ai_notifications_test -v ON_ERROR_STOP=1 < "$file"
+          done
+
+      - name: Isolated external VoIP account separation
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          docker exec "$POSTGRES_CONTAINER" createdb -U ledger_test voip_external_test
+          for file in tests/sql/voip_external_accounts_fixture.sql \
+            database_v1_phase596_voip_external_accounts.sql \
+            database_v1_phase596_voip_external_accounts.sql \
+            tests/sql/voip_external_accounts_assertions.sql; do
+            docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d voip_external_test -v ON_ERROR_STOP=1 < "$file"
+          done
+
+      - name: Isolated SIP bridge authorization and lease checks
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          for file in tests/sql/voip_provider_bridge_fixture.sql \
+            database_v1_phase597_voip_provider_bridge.sql \
+            database_v1_phase597_voip_provider_bridge.sql \
+            database_v1_phase602_voip_operator_call_presence.sql \
+            database_v1_phase602_voip_operator_call_presence.sql \
+            database_v1_phase603_customer_voice_sessions.sql \
+            database_v1_phase603_customer_voice_sessions.sql \
+            tests/sql/customer_voice_session_assertions.sql \
+            tests/sql/voip_provider_bridge_assertions.sql; do
+            docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d voip_external_test -v ON_ERROR_STOP=1 < "$file"
+          done
+          python3 -m unittest discover -s ops/voip/asterisk -p test_bridge_worker.py -v
+          python3 -m unittest discover -s ops/voip/asterisk -p test_voice_worker.py -v
+
+      - name: Call contact history isolation and pagination
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          for file in tests/sql/call_contact_history_fixture.sql \
+            database_v1_phase598_call_contact_history.sql \
+            database_v1_phase598_call_contact_history.sql \
+            database_v1_phase599_call_contact_current_org_plan.sql \
+            database_v1_phase599_call_contact_current_org_plan.sql \
+            database_v1_phase600_call_contact_legacy_reference_types.sql \
+            database_v1_phase600_call_contact_legacy_reference_types.sql \
+            tests/sql/call_contact_history_assertions.sql; do
+            docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d voip_external_test -v ON_ERROR_STOP=1 < "$file"
+          done
+
+      - name: Asterisk dynamic contact persistence and private grants
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          for file in tests/sql/voip_contact_fields_fixture.sql \
+            database_v1_phase601_voip_realtime_contact_fields.sql \
+            database_v1_phase601_voip_realtime_contact_fields.sql \
+            tests/sql/voip_contact_fields_assertions.sql; do
+            docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d voip_external_test -v ON_ERROR_STOP=1 < "$file"
+          done
+
+      - name: Tenant site and product content RLS integration checks
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          docker exec "$POSTGRES_CONTAINER" createdb -U ledger_test tenant_content_test
+          for file in tests/database/tenant-content-rls.integration.setup.sql \
+            database_v1_phase589_external_sync_history.sql \
+            database_v1_phase590_tenant_site_builder.sql \
+            database_v1_phase591_product_site_content_drafts.sql \
+            database_v1_phase592_woo_import_outcome.sql \
+            tests/database/tenant-content-rls.integration.test.sql; do
+            docker exec -i "$POSTGRES_CONTAINER" psql -U ledger_test -d tenant_content_test -v ON_ERROR_STOP=1 < "$file"
+          done
       - name: Install
         run: npm ci
+
+      - name: WooCommerce product content and sales regressions
+        run: >-
+          npx vitest run test/wooProductSales.test.ts utils/richText.test.ts
+          supabase/functions/external-connectors/product-site-content.test.ts
+          supabase/functions/external-connectors/product-content-status.test.ts
+          supabase/functions/external-connectors/external-sync-history.test.ts
+          components/products/ProductWooSyncTable.test.tsx components/moduleShow/FieldGroupsTabs.test.tsx
+          --maxWorkers=1 --no-file-parallelism
+
       - name: Typecheck
-        run: npx tsc --noEmit
-      - name: Assistant and organization authentication regression checks
         env:
-          VITE_SUPABASE_URL: https://isolated-test.invalid
-          VITE_SUPABASE_ANON_KEY: isolated-test-only
-        run: npx vitest run components/ai/AiChatSurfaceV2.test.tsx components/ai/AssistantPanel.operators.test.tsx supabase/functions/ai-assistant/data-tool-loop.test.ts supabase/functions/ai-assistant/thread-memory.test.ts supabase/functions/_shared/ai-conversation-routing.test.ts supabase/functions/_shared/organization-password-auth.test.ts supabase/functions/user-admin/membership.test.ts pages/Login.test.tsx --maxWorkers=1 --no-file-parallelism
+          NODE_OPTIONS: --max-old-space-size=4096
+        run: npx tsc --noEmit
+
+      - name: Central feedback, contact confirmation and popup navigation
+        timeout-minutes: 5
+        run: >-
+          npx vitest run utils/uiNotificationOverlayStore.test.ts utils/notificationOverlayCategories.test.ts
+          utils/aiNotifications.test.ts hooks/useAiConversationRead.test.tsx
+          utils/appFeedback.test.ts utils/feedbackRouting.test.ts utils/feedbackArchitecture.test.ts utils/recordFeedback.test.ts
+          components/RecordMessageActions.test.tsx components/UploadProgressOverlay.test.tsx pages/ShareTargetPage.test.tsx utils/uploadFileWithProgress.test.ts components/dashboard/MyTasksWidget.test.tsx components/dashboard/DashboardLayout.test.tsx
+          --maxWorkers=1 --no-file-parallelism
+
+      - name: Shared AI agents and chat surfaces regression checks
+        timeout-minutes: 10
+        run: >-
+          npx vitest run supabase/functions/ai-assistant/operational-preflight.test.ts supabase/functions/_shared/ai-gateway.test.ts supabase/functions/_shared/ai-provider-keys.test.ts
+          supabase/functions/_shared/ai-native-skills.test.ts supabase/functions/_shared/ai-agent-data.test.ts supabase/functions/_shared/ai-skills/instagram-tools.test.ts
+          supabase/functions/_shared/ai-process-data.test.ts supabase/functions/_shared/ai-process-operations.test.ts supabase/functions/ai-assistant/process-execution.test.ts
+          supabase/functions/_shared/ai-approval-edits.test.ts supabase/functions/ai-assistant/record-execution.test.ts
+          supabase/functions/_shared/ai-context-lifecycle.test.ts supabase/functions/ai-assistant/thread-memory.test.ts supabase/functions/ai-assistant/free-chat.test.ts
+          supabase/functions/_shared/ai-reasoning.test.ts
+          supabase/functions/_shared/ai-focused-skills.test.ts supabase/functions/main/index.test.ts components/ai/AiAgentSkillsEditor.test.tsx components/ai/AiVoiceRecorder.test.tsx
+          supabase/functions/_shared/ai-tool-calls.test.ts supabase/functions/ai-assistant/data-tool-loop.test.ts
+          supabase/functions/_shared/ai-agent-task-contract.test.ts supabase/functions/_shared/ai-agent-task-runtime.test.ts
+          supabase/functions/_shared/ai-agent-task-management.test.ts supabase/functions/ai-assistant/agent-task-execution.test.ts
+          supabase/functions/_shared/ai-agent-task-lifecycle.test.ts components/ai/AiAgentTaskApprovalCard.test.tsx
+          supabase/functions/_shared/ai-agent-task-queue.test.ts supabase/functions/workflow-interval-runner/agent-task-delivery.test.ts
+          supabase/functions/_shared/ai-record-files.test.ts supabase/functions/_shared/ai-record-lookups.test.ts supabase/functions/_shared/ai-record-display.test.ts
+          components/ai/AiRecordResultCard.test.tsx components/ai/AiUsageHistoryTable.test.tsx utils/aiMessageParts.test.ts
+          supabase/functions/_shared/ai-record-contract.test.ts supabase/functions/_shared/ai-agents.test.ts supabase/functions/_shared/ai-agent-contract.test.ts supabase/functions/_shared/ai-agent-inbox.test.ts utils/__tests__/aiAaasFoundation.test.ts
+          components/ai/AiMessageComposer.test.tsx components/ai/AiGenerationStatusCard.test.tsx
+          components/AppVersionUpdateBanner.test.tsx hooks/useAiComposerDraft.test.tsx utils/appVersionUpdate.test.ts
+          components/ai/AiChatSurfaceV2.test.tsx components/ai/AssistantPanel.operators.test.tsx
+          components/ai/AiCapabilityComposerActions.test.tsx components/ai/AiComposeModelBar.test.tsx components/AdaptivePickerSurface.test.tsx
+          components/ai/AiRecordMutationApprovalCard.test.tsx components/ai/AiApprovalReviewModal.test.tsx components/ai/AiQuestionCard.test.tsx components/ai/AiMessageRenderer.test.tsx
+          supabase/functions/_shared/mcp-server.test.ts
+          --maxWorkers=1 --no-file-parallelism
+
+      - name: Organization membership and login regression checks
+        timeout-minutes: 10
+        run: npm run test:organization-memberships
+
+      - name: Public SEO recovery checks
+        # No production credentials or real SMTP traffic are used by email regressions.
+        run: node --test scripts/preserve-public-seo.test.mjs scripts/public-brand-seo.test.mjs
+
+      - name: Organization email UI and SQL regression checks
+        timeout-minutes: 8
+        run: npm run test:organization-email
+
+      - name: Organization SMS context regression checks
+        run: npx vitest run utils/smsGateway.senderNumbers.test.ts --maxWorkers=1
+
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.9.6
-      - name: Verify Edge runtime dependencies
-        run: deno check --node-modules-dir=none supabase/functions/ai-assistant/index.ts supabase/functions/user-admin/index.ts supabase/functions/send-sms/index.ts
+
+      - name: WooCommerce product transfer lock regression
+        run: |
+          directory="$(mktemp -d)"
+          cp -r supabase/functions/external-connectors "$directory/"
+          deno check --frozen --lock=deno.lock --node-modules-dir=none "$directory/external-connectors/index.ts"
+          deno test --frozen --lock=deno.lock --node-modules-dir=none --allow-env=CI,FORCE_COLOR,NO_COLOR,TERM "$directory/external-connectors/product-content.deno.ts"
+
+      - name: Organization email backend regression checks
+        run: deno test --node-modules-dir=none --allow-env --allow-read --allow-sys supabase/functions/_shared/email-runtime.deno.ts supabase/functions/send-email/send-email.deno.ts
+
+      - name: Email function dependency checks
+        run: deno check --node-modules-dir=none supabase/functions/email-admin/index.ts supabase/functions/send-email/index.ts supabase/functions/email-provider-events/index.ts supabase/functions/email-sync-worker/index.ts supabase/functions/send-sms/index.ts
+
+      - name: Prepare activity performance deployment dependencies
+        run: |
+          mkdir -p supabase/functions/activity-performance/_runtime-deps
+          cp shared/recordRuntime.ts shared/taskRuntimeCatalog.ts supabase/functions/activity-performance/_runtime-deps/
+          cp utils/formulaRuntime.ts supabase/functions/activity-performance/_runtime-deps/
+
+      - name: AI assistant dependency checks
+        run: |
+          npm run ai:schemas:check
+          deno check --node-modules-dir=none supabase/functions/_shared/ai-agent-task-management.ts supabase/functions/_shared/ai-agent-task-contract.ts supabase/functions/_shared/ai-agent-task-runtime.ts supabase/functions/_shared/ai-agent-task-queue.ts
+          deno check --node-modules-dir=none supabase/functions/_shared/ai-agent-data.ts supabase/functions/_shared/ai-native-skills.ts supabase/functions/_shared/ai-tool-calls.ts
+          deno check --node-modules-dir=none supabase/functions/_shared/ai-process-data.ts supabase/functions/_shared/ai-process-operations.ts
+          deno check --node-modules-dir=none supabase/functions/_shared/ai-context-policy.ts supabase/functions/_shared/ai-context-lifecycle.ts supabase/functions/_shared/ai-context-compressor.ts
+          deno check --node-modules-dir=none supabase/functions/_shared/ai-reasoning.ts supabase/functions/_shared/ai-reasoning-transport.ts
+          deno check --node-modules-dir=none supabase/functions/_shared/ai-agents.ts supabase/functions/_shared/mcp-oauth.ts supabase/functions/_shared/mcp-runtime.ts supabase/functions/mcp-server/index.ts supabase/functions/ai-assistant/index.ts supabase/functions/external-connectors/index.ts supabase/functions/api-gateway/index.ts supabase/functions/webhook-delivery/index.ts supabase/functions/user-admin/index.ts supabase/functions/bot-admin/index.ts supabase/functions/bot-webhook/index.ts supabase/functions/report-runtime/index.ts supabase/functions/activity-performance/index.ts
+
+      - name: Messaging attachment and viewer isolation regression checks
+        timeout-minutes: 8
+        run: >-
+          npx vitest run utils/messageAttachmentPreview.test.ts utils/messageAttachments.test.ts
+          utils/internalNoteAccess.test.ts hooks/useInternalConversationTimeline.test.tsx
+          hooks/useNotificationConversationList.test.tsx
+          components/messaging/MessageAttachmentGallery.test.tsx components/common/ComposerDropZone.test.tsx
+          components/common/AttachmentSourceButton.test.tsx
+          --maxWorkers=1 --no-file-parallelism
+
+      - name: Notification dismissal and sidebar regression checks
+        timeout-minutes: 5
+        run: >-
+          npx vitest run components/layout/SidebarMenu.test.tsx
+          utils/sidebarLayout.test.ts
+          components/stories/storyStudio.test.ts
+          --maxWorkers=1 --no-file-parallelism
+
+      - name: Support direction, unread access and module field permissions
+        timeout-minutes: 5
+        env:
+          VITE_SUPABASE_URL: https://isolated-test.invalid
+          VITE_SUPABASE_ANON_KEY: isolated-test-only
+        run: >-
+          npx vitest run test/moduleFieldActions.test.ts test/supportTicketDirection.test.ts
+          utils/fieldAccess.test.ts utils/permissionAvailability.test.ts utils/permissions.test.ts utils/supportTickets.test.ts
+          --maxWorkers=1 --no-file-parallelism
+
+      - name: Content calendar regression checks
+        timeout-minutes: 8
+        run: >-
+          npx vitest run utils/contentCalendarMovement.test.ts utils/contentCalendarPresentation.test.ts
+          utils/contentCalendarCopy.test.ts components/contentCalendars/CalendarDayEvents.test.tsx
+          components/contentCalendars/ContentCalendarRuntime.test.tsx pages/OnlineContentCalendarPublicPage.test.tsx
+          utils/aiUploadedFilePrompt.test.ts supabase/functions/_shared/ai-content-calendar.test.ts
+          --maxWorkers=1 --no-file-parallelism
+
+      - name: Module list regression checks
+        timeout-minutes: 12
+        run: >-
+          npx vitest run
+          utils/tableColumnLayout.test.ts utils/moduleListLocalRows.test.ts
+          utils/moduleListShortcut.test.ts utils/moduleListColumnFilters.test.ts
+          utils/moduleListFilterDisplay.test.ts
+          utils/optionHelpers.test.ts utils/moduleListLive.test.ts
+          utils/saasPlanDisplayFeatures.test.ts utils/saasOfferingCatalog.test.ts utils/userAnnouncements.test.ts
+          supabase/functions/_shared/org-plan-access.test.ts supabase/functions/_shared/ai-plan-capabilities.test.ts supabase/functions/_shared/bot-plan-access.test.ts components/saas/SaasOrgAdminDrawer.test.tsx components/saas/PlanFeatureBoundary.test.tsx utils/overlayLocks.test.ts utils/aiBilling.test.ts utils/ownerPasswordPolicy.test.ts utils/email.test.ts
+          hooks/useTableColumnLayout.test.tsx components/table/TableChoiceFilter.test.tsx
+          components/SmartTableRenderer.test.tsx
+          components/moduleList/RelatedActivityIndicators.test.tsx
+          components/moduleList/Toolbar.ai.test.tsx components/moduleList/RenderCardItem.test.tsx
+          components/RelationQuickCreate.test.tsx utils/moduleListOptions.test.ts
+          --maxWorkers=1 --no-file-parallelism
+
+      - name: Cash and bank report regression checks
+        timeout-minutes: 8
+        run: >-
+          npx vitest run pages/CashBankPage.test.tsx utils/cashBankLedger.test.ts
+          utils/printTemplates/store.test.ts utils/listPrintExport.test.ts
+          utils/printTemplates/nativePrintFlow.test.ts utils/printTemplates/nativeTablePagination.test.ts
+          utils/printTemplates/buildPrintDocumentHtml.test.ts utils/printTemplates/templateRenderer.test.ts
+          utils/printTemplates/staticPrintPagination.test.ts utils/printTemplates/fragmentPacking.test.ts
+          utils/printTemplates/letterheadSignatureFlow.test.ts utils/printTemplates/tableRowSlices.test.ts
+          utils/printTemplates/splitPrintTextBlock.test.ts
+          utils/printTemplates/printFlowStructure.test.ts
+          utils/printTemplates/tableCellContinuations.test.ts
+          --maxWorkers=1 --no-file-parallelism
+
+      - name: HR filters and picker regression checks
+        timeout-minutes: 5
+        run: >-
+          npx vitest run
+          utils/hrFilters.test.ts utils/popupContainer.test.ts test/internalWebFormMembership.test.ts
+          components/AdaptiveSelectField.test.tsx components/PersianDateRangePicker.test.tsx
+          components/PersianDatePicker.test.tsx pages/WorkSchedulesPage.test.tsx utils/attendanceDailySchedule.test.ts
+          --maxWorkers=1 --no-file-parallelism
+
+      - name: Report row limits and commission collection checks
+        timeout-minutes: 5
+        env:
+          VITE_SUPABASE_URL: https://isolated-test.invalid
+          VITE_SUPABASE_ANON_KEY: isolated-test-only
+        run: npx vitest run utils/reportRowLimit.test.ts utils/reporting.test.ts utils/commissionRuntime.test.ts utils/commissionChequeDisplay.test.ts components/hr/CommissionChequeCard.test.tsx --maxWorkers=1 --no-file-parallelism
+
+      - name: Tenant VoIP modes, account separation and registration checks
+        timeout-minutes: 5
+        env:
+          VITE_SUPABASE_URL: https://isolated-test.invalid
+          VITE_SUPABASE_ANON_KEY: isolated-test-only
+        run: npx vitest run utils/voipQr.test.ts utils/voipConnectionPolicy.test.ts utils/voipRouteStrategy.test.ts utils/voipStoreLifecycle.test.ts utils/voipCallHistory.test.ts utils/voipAudioOutput.test.ts utils/voipTabOwnership.test.ts hooks/useCustomerPhoneAi.test.tsx supabase/functions/voip-session/index.test.ts supabase/functions/voip-ai-session/index.test.ts supabase/functions/_shared/voip-contact-context.test.ts supabase/functions/_shared/voip-directory.test.ts supabase/functions/_shared/customer-voice-turn.test.ts components/settings/VoipConnectionSettings.test.tsx components/voip/WebPhoneWidget.test.tsx components/voip/VoipDirectoryPicker.test.tsx components/voip/CallContactContextPanel.test.tsx pages/ContactCenterPage.test.tsx --maxWorkers=1 --no-file-parallelism
+
+      - name: Call contact Edge dependency checks
+        run: deno check --node-modules-dir=none supabase/functions/voip-contact-context/index.ts supabase/functions/voip-ai-session/index.ts
+
       - name: Build
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
@@ -44,12 +533,425 @@ jobs:
           VITE_MAP_STYLE_URL: ${{ secrets.VITE_MAP_STYLE_URL }}
           VITE_WEB_PUSH_PUBLIC_KEY: ${{ secrets.VITE_WEB_PUSH_PUBLIC_KEY }}
         run: npm run build
-      - name: Verify PWA and SEO release
+
+      - name: Check table conditions across feature runtimes
+        run: npx vitest run shared/recordRuntime.test.ts utils/workflowRuntime.test.ts utils/reporting.test.ts utils/reportQueryPrefilters.test.ts utils/viewDateFilters.test.ts utils/customerClub.test.ts utils/processActivatorContext.test.ts components/workflows/WorkflowConditionsGroup.test.tsx --maxWorkers=1 --no-file-parallelism
+
+      - name: Verify PWA release
         run: |
+          node --test scripts/verify-live-pwa-release.test.mjs
           node scripts/verify-pwa-release.mjs
-          node --test scripts/verify-live-pwa-release.test.mjs scripts/preserve-public-seo.test.mjs scripts/public-brand-seo.test.mjs
+
+      - name: Public ecosystem browser checks
+        if: github.event_name != 'workflow_dispatch' || !inputs.skip_browser_checks
+        timeout-minutes: 8
+        env:
+          PLAYWRIGHT_BROWSER: chromium
+        run: |
+          set -euo pipefail
+          npm install --prefix "$RUNNER_TEMP/ecosystem-browser" --no-package-lock --no-save playwright@1.64.1
+          node "$RUNNER_TEMP/ecosystem-browser/node_modules/playwright/cli.js" install --with-deps chromium
+          npm run preview -- --host 127.0.0.1 --port 5189 > "$RUNNER_TEMP/ecosystem-preview.log" 2>&1 &
+          PREVIEW_PID=$!
+          trap 'kill "$PREVIEW_PID" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --silent --fail http://127.0.0.1:5189/tazesystem > /dev/null; then break; fi
+            sleep 1
+          done
+          PLAYWRIGHT_MODULE="$RUNNER_TEMP/ecosystem-browser/node_modules/playwright/index.mjs" node scripts/qa/ecosystem-orbit.mjs
+          PLAYWRIGHT_MODULE="$RUNNER_TEMP/ecosystem-browser/node_modules/playwright/index.mjs" node scripts/qa/public-startup.mjs
+          node scripts/qa/build-feedback-preview.mjs
+          PLAYWRIGHT_MODULE="$RUNNER_TEMP/ecosystem-browser/node_modules/playwright/index.mjs" node scripts/qa/feedback-browser.mjs
+          UI_PREVIEW_ENTRY=scripts/qa/sidebar-fixture.tsx UI_PREVIEW_DIR=tmp/sidebar-preview node scripts/qa/build-feedback-preview.mjs
+          PLAYWRIGHT_MODULE="$RUNNER_TEMP/ecosystem-browser/node_modules/playwright/index.mjs" node scripts/qa/sidebar-browser.mjs
+          node scripts/qa/build-contact-center-preview.mjs
+          PLAYWRIGHT_MODULE="$RUNNER_TEMP/ecosystem-browser/node_modules/playwright/index.mjs" node scripts/qa/contact-center-browser.mjs
+
+      - name: Upload contact center review
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: contact-center-review
+          path: tmp/contact-center-review
+          if-no-files-found: ignore
+
+      - name: Upload sidebar review
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sidebar-review
+          path: tmp/sidebar-review
+          if-no-files-found: ignore
+
+      - name: Upload feedback review
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: feedback-review
+          path: tmp/feedback-review
+          if-no-files-found: ignore
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ecosystem-review
+          path: tmp/ecosystem-review
+          if-no-files-found: ignore
+
       - uses: actions/upload-artifact@v4
         with:
           name: dist
           path: dist
-          if-no-files-found: error
+
+  deploy_woocommerce_connector:
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy && inputs.woocommerce_connector_only && !inputs.frontend_only && !inputs.cash_bank_ledger_migration_only
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - name: Check the WooCommerce connector and its regression tests
+        run: |
+          directory="$(mktemp -d)"
+          cp -r supabase/functions/external-connectors "$directory/"
+          deno check --frozen --lock=deno.lock --node-modules-dir=none "$directory/external-connectors/index.ts"
+          deno test --frozen --lock=deno.lock --node-modules-dir=none --allow-env=CI,FORCE_COLOR,NO_COLOR,TERM "$directory/external-connectors/product-content.deno.ts"
+      - name: Verify latest main and wait for earlier releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/wait-for-production-release.mjs
+      - uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SERVER_SSH_KEY }}
+      - name: Add server host key
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          ssh-keyscan -T 15 -p "${SERVER_PORT:-22}" "$SERVER_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          chmod 600 ~/.ssh/known_hosts
+      - name: Deploy the WooCommerce connector
+        shell: pwsh
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVER_HOST }}
+          DEPLOY_PORT: ${{ secrets.SERVER_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVER_USER }}
+          DEPLOY_FUNCTIONS_PATH: /opt/kalamapp/supabase/docker/volumes/functions
+          DEPLOY_FUNCTIONS_COMPOSE_DIR: /opt/kalamapp/supabase/docker
+        run: ./scripts/deploy-supabase-function.ps1 -Functions @('external-connectors')
+      - name: Check the live WooCommerce connector
+        run: node scripts/smoke-woocommerce-connector.mjs
+
+  deploy_cash_bank_ledger_migration:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.deploy && inputs.cash_bank_ledger_migration_only && !inputs.frontend_only && !inputs.woocommerce_connector_only
+    needs: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify latest main and wait for earlier releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/wait-for-production-release.mjs
+      - uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SERVER_SSH_KEY }}
+      - name: Add server host key
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          ssh-keyscan -T 15 -p "${SERVER_PORT:-22}" "$SERVER_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          chmod 600 ~/.ssh/known_hosts
+      - name: Apply the approved ledger migration
+        shell: pwsh
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVER_HOST }}
+          DEPLOY_PORT: ${{ secrets.SERVER_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVER_USER }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git fetch --no-tags origin main
+          if ($LASTEXITCODE -ne 0 -or (git rev-parse origin/main) -ne $env:GITHUB_SHA) {
+            throw 'Main advanced before the ledger migration. Validate the newest revision first.'
+          }
+          $migration = 'database_v1_phase617_cash_bank_ledger_cheque_lookup.sql'
+          Get-FileHash -Algorithm SHA256 -LiteralPath $migration | Format-List
+          & ./scripts/run-server-db-migrations.ps1 -SqlFiles @($migration)
+
+  deploy:
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy && !inputs.woocommerce_connector_only && !inputs.cash_bank_ledger_migration_only
+    needs: ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Preserve concurrent committed changes and wait for earlier releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/wait-for-production-release.mjs
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      - name: Start ssh-agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SERVER_SSH_KEY }}
+
+      - name: Add server host key
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
+        run: |
+          set -euo pipefail
+          HOST="${SERVER_HOST:-}"
+          PORT="${SERVER_PORT:-22}"
+
+          if [ -z "$HOST" ]; then
+            echo "::error::SERVER_HOST secret is empty."
+            exit 1
+          fi
+
+          if ! [[ "$PORT" =~ ^[0-9]+$ ]]; then
+            echo "::error::SERVER_PORT must be numeric."
+            exit 1
+          fi
+
+          mkdir -p ~/.ssh
+          touch ~/.ssh/known_hosts
+          chmod 700 ~/.ssh
+          chmod 600 ~/.ssh/known_hosts
+
+          for attempt in 1 2 3; do
+            if ssh-keyscan -T 15 -p "$PORT" "$HOST" >> ~/.ssh/known_hosts 2>/dev/null; then
+              sort -u ~/.ssh/known_hosts -o ~/.ssh/known_hosts
+              echo "SSH host key added for $HOST:$PORT"
+              exit 0
+            fi
+
+            if [ "$attempt" -lt 3 ]; then
+              echo "ssh-keyscan failed (attempt $attempt). Retrying..."
+              sleep 3
+            fi
+          done
+
+          echo "::error::Could not fetch SSH host key from $HOST:$PORT. Check SERVER_HOST/SERVER_PORT and firewall/public reachability from GitHub Actions."
+          exit 1
+
+      - name: Preserve published SEO pages during CMS outage
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          if node -e 'process.exit(JSON.parse(require("fs").readFileSync("dist/seo-generation.json", "utf8")).dynamicComplete ? 0 : 1)'; then
+            exit 0
+          fi
+          PREVIOUS_SEO="$RUNNER_TEMP/previous-public-seo"
+          mkdir -p "$PREVIOUS_SEO"
+          DEPLOY_PATH="${DEPLOY_PATH:-/var/www/kalamapp}"
+          for attempt in 1 2 3; do
+            if timeout 60 ssh -o BatchMode=yes -o ConnectTimeout=15 \
+              -o ServerAliveInterval=10 -o ServerAliveCountMax=2 \
+              -o ControlMaster=auto -o "ControlPath=$HOME/.ssh/deploy-%C" -o ControlPersist=600 \
+              -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" \
+              "tar -C '$DEPLOY_PATH/current' -cf - seo-pages" | tar -xf - -C "$PREVIOUS_SEO"; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::CMS unavailable and previous public SEO pages could not be retrieved."
+              exit 1
+            fi
+            sleep 3
+          done
+          node scripts/preserve-public-seo.mjs "$PREVIOUS_SEO/seo-pages" dist
+
+      - name: Pack dist
+        run: tar -czf dist.tar.gz -C dist .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-bundle-${{ github.sha }}
+          path: dist.tar.gz
+          retention-days: 3
+
+      - name: Pull exact CI bundle on server
+        id: artifact_pull
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+        run: node scripts/pull-ci-release-artifact.mjs
+
+      - name: Upload bundle
+        if: steps.artifact_pull.outcome != 'success'
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+        run: |
+          set -euo pipefail
+          # اتصال از runner کند است؛ rsync انتقال نیمه‌کاره را ادامه می‌دهد.
+          export RSYNC_RSH="ssh -o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=2 -o ControlMaster=auto -o ControlPath=$HOME/.ssh/deploy-%C -o ControlPersist=600 -p $SERVER_PORT"
+          ARCHIVE="/tmp/kalamapp-dist-${GITHUB_SHA}.tar.gz"
+          for attempt in 1 2; do
+            if timeout 480 rsync --append-verify --partial --timeout=90 \
+              dist.tar.gz "$SERVER_USER@$SERVER_HOST:$ARCHIVE"; then
+              break
+            fi
+            if [ "$attempt" -eq 2 ]; then
+              echo "::error::Artifact transfer failed twice."
+              exit 1
+            fi
+            sleep 5
+          done
+
+          LOCAL_SHA="$(sha256sum dist.tar.gz | cut -d ' ' -f 1)"
+          REMOTE_SHA=""
+          for attempt in 1 2 3; do
+            if REMOTE_SHA="$(timeout 45 ssh -o BatchMode=yes -o ConnectTimeout=15 \
+              -o ServerAliveInterval=10 -o ServerAliveCountMax=2 \
+              -o ControlMaster=auto -o "ControlPath=$HOME/.ssh/deploy-%C" -o ControlPersist=600 \
+              -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" "sha256sum '$ARCHIVE'" | cut -d ' ' -f 1)"; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::Could not verify uploaded artifact after three connection attempts."
+              exit 1
+            fi
+            sleep 3
+          done
+          if [ "$LOCAL_SHA" != "$REMOTE_SHA" ]; then
+            echo "::error::Uploaded artifact checksum mismatch."
+            exit 1
+          fi
+
+      - name: Confirm this release includes the latest changes on main
+        run: |
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if [ "$GITHUB_SHA" != "$(git rev-parse origin/main)" ]; then
+            echo "::error::main has advanced. Test the newest source before deploying."
+            exit 1
+          fi
+
+      - name: Apply the explicitly approved migrations
+        if: ${{ !inputs.frontend_only && !inputs.ai_approval_release }}
+        shell: pwsh
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVER_HOST }}
+          DEPLOY_PORT: ${{ secrets.SERVER_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVER_USER }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $migrations = if ('${{ inputs.ai_calendar_release }}' -eq 'true') {
+            @('database_v1_phase621_atomic_saas_ai_provider_key_activation.sql', 'database_v1_phase622_ai_content_calendar_drafts.sql')
+          } else {
+            @('database_v1_phase615_customer_club_invoice_conditions.sql', 'database_v1_phase616_cash_bank_private_saved_views.sql', 'database_v1_phase619_saas_ai_provider_keys.sql', 'database_v1_phase620_external_mcp_access.sql')
+          }
+          $migrations | ForEach-Object { Get-FileHash -Algorithm SHA256 -LiteralPath $_ } | Format-List
+          & ./scripts/run-server-db-migrations.ps1 -SqlFiles $migrations
+
+      - name: Deploy Edge Functions
+        if: ${{ !inputs.frontend_only }}
+        shell: pwsh
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVER_HOST }}
+          DEPLOY_PORT: ${{ secrets.SERVER_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVER_USER }}
+          DEPLOY_FUNCTIONS_PATH: /opt/kalamapp/supabase/docker/volumes/functions
+          DEPLOY_FUNCTIONS_COMPOSE_DIR: /opt/kalamapp/supabase/docker
+        run: |
+          $functions = if ('${{ inputs.ai_approval_release }}' -eq 'true') {
+            @('ai-assistant')
+          } elseif ('${{ inputs.ai_calendar_release }}' -eq 'true') {
+            @('workflow-interval-runner','ai-assistant','bot-webhook')
+          } else {
+            @('goal-progress','report-runtime','workflow-interval-runner','ai-assistant','bot-webhook','mcp-server','api-gateway')
+          }
+          ./scripts/deploy-supabase-function.ps1 -Functions $functions
+
+      - uses: actions/setup-node@v4
+        if: ${{ !inputs.frontend_only }}
+        with:
+          node-version: 20
+
+      - name: Verify the live condition RPC and Edge Functions
+        if: ${{ !inputs.frontend_only }}
+        env:
+          DEPLOY_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          DEPLOY_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          VERIFY_AI_CALENDAR_RELEASE: ${{ inputs.ai_calendar_release }}
+        run: node scripts/smoke-condition-runtimes.mjs
+
+      - name: Recheck main before activating the frontend
+        run: |
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if [ "$GITHUB_SHA" != "$(git rev-parse origin/main)" ]; then
+            echo "::error::main has advanced. Test the newest source before activating the frontend."
+            exit 1
+          fi
+
+      - name: Activate release
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          # Note: SSH does not forward env vars by default, so we pass DEPLOY_PATH explicitly.
+          timeout 120 ssh \
+            -o BatchMode=yes \
+            -o ConnectTimeout=20 \
+            -o ServerAliveInterval=15 \
+            -o ServerAliveCountMax=2 \
+            -o ControlMaster=auto \
+            -o "ControlPath=$HOME/.ssh/deploy-%C" \
+            -o ControlPersist=600 \
+            -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" "DEPLOY_PATH='$DEPLOY_PATH' GITHUB_SHA='$GITHUB_SHA' bash -s" << 'EOF'
+          set -euo pipefail
+
+          DEPLOY_PATH="${DEPLOY_PATH:-/var/www/kalamapp}"
+          ARCHIVE="/tmp/kalamapp-dist-${GITHUB_SHA}.tar.gz"
+          TS="$(date +%Y%m%d%H%M%S)"
+
+          mkdir -p "$DEPLOY_PATH/releases"
+          RELEASE_DIR="$DEPLOY_PATH/releases/$TS"
+          mkdir -p "$RELEASE_DIR"
+
+          tar -xzf "$ARCHIVE" -C "$RELEASE_DIR"
+          ln -sfn "$RELEASE_DIR" "$DEPLOY_PATH/current"
+
+          # Keep last 5 releases for quick rollback.
+          if [ -d "$DEPLOY_PATH/releases" ]; then
+            ls -1dt "$DEPLOY_PATH/releases"/* 2>/dev/null | tail -n +6 | xargs -r rm -rf
+          fi
+
+          # Reload nginx if allowed for this user.
+          if command -v systemctl >/dev/null 2>&1; then
+            sudo systemctl reload nginx || true
+          fi
+
+          echo "Deployed $RELEASE_DIR"
+          EOF
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Verify live PWA version and cache headers
+        run: node scripts/verify-live-pwa-release.mjs

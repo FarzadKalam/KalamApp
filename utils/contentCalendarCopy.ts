@@ -170,7 +170,7 @@ const toDraftStage = (
     process_links: normalizeLinks(recurrence?.process_links, links),
   };
   if (shiftMonths) {
-    ["start_date", "due_date", "completed_at"].forEach((key) => {
+    ["start_date", "due_date", "completed_at", "calendar_date"].forEach((key) => {
       if (draft[key]) draft[key] = shiftDateValue(draft[key], shiftMonths);
     });
     if (draft.metadata?.start_date) draft.metadata.start_date = shiftDateValue(draft.metadata.start_date, shiftMonths);

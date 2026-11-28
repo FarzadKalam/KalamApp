@@ -60,6 +60,7 @@ import { loadProcessTemplateStages } from "../../utils/processTemplateStages";
 import {
   createProcessGroupId,
   ensureProcessRunForDraftStageGroup,
+  getDraftStageProcessGroupMeta,
   mapProcessTemplateStagesToDraft,
   resolveProcessRunStageId,
 } from "../../utils/processRunRuntime";
@@ -70,6 +71,7 @@ import {
 import { assignProcessTemplateModuleAliases } from "../../utils/processTemplateContext";
 import { doesProcessTemplateSupportModule } from "../../utils/processTargets";
 import { saveProcessV2DraftStage } from "../../utils/processV2DraftStagePersistence";
+import { updateContentCalendarDrafts } from "../../utils/contentCalendarDraftPersistence";
 import { loadProcessTaskModalContext } from "../../utils/processTaskModalContext";
 import { buildContentCalendarTaskCopyDraft } from "../../utils/contentCalendarCopy";
 import { copyContentCalendarToNextMonth } from "../../utils/contentCalendarCopy";
@@ -102,6 +104,8 @@ const asDate = (value: any) => {
 };
 const toKey = (date: Date) =>
   `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+const getCalendarDraftDate = (stage: any) =>
+  asDate(stage?.start_date) || asDate(stage?.due_date) || asDate(stage?.calendar_date);
 const addDays = (date: Date, amount: number) => {
   const next = new Date(date);
   next.setDate(next.getDate() + amount);
@@ -216,6 +220,7 @@ const ContentCalendarRuntime: React.FC<{
   const [projects, setProjects] = useState<any[]>([]);
   const [tasks, setTasks] = useState<any[]>([]);
   const [calendarDraftStages, setCalendarDraftStages] = useState<any[]>([]);
+  const [revealedDay, setRevealedDay] = useState<{ calendarId: string; dayKey: string }>();
   const [directory, setDirectory] = useState<{ users: any[]; roles: any[] }>({
     users: [],
     roles: [],
@@ -409,12 +414,7 @@ const ContentCalendarRuntime: React.FC<{
       });
     if (mode !== "projects")
       calendarDraftStages.forEach((draftStage: any, index: number) => {
-        const date = asDate(
-          draftStage?.start_date
-            || draftStage?.due_date
-            || calendar?.start_date
-            || calendar?.end_date,
-        );
+        const date = getCalendarDraftDate(draftStage) || asDate(calendar?.start_date || calendar?.end_date);
         if (!date) return;
         entries.push({
           id: `calendar:${String(draftStage?.id || draftStage?.process_node_key || index)}`,
@@ -474,6 +474,13 @@ const ContentCalendarRuntime: React.FC<{
     stage?.process_run_stage_id,
   ].map((value) => String(value || "").trim()).filter(Boolean);
   const removeDraftFromOwner = async (table: "content_calendars" | "projects", ownerId: string, selectedStage: any) => {
+    if (table === "content_calendars") {
+      await updateContentCalendarDrafts(supabase, ownerId, (current) => {
+        const next = current.filter((stage) => stage.id !== selectedStage.id);
+        return next.length === current.length ? current : next;
+      });
+      return;
+    }
     const { data, error } = await supabase
       .from(table)
       .select("execution_process_draft")
@@ -512,8 +519,7 @@ const ContentCalendarRuntime: React.FC<{
     templateTitle = null,
     contentType = null,
     scheduleDate = null,
-    onDraftCreated,
-    onDraftSaved,
+    existingDraft = false,
   }: {
     draftStages: any[];
     targetStage: any;
@@ -522,8 +528,7 @@ const ContentCalendarRuntime: React.FC<{
     templateTitle?: string | null;
     contentType?: string | null;
     scheduleDate?: Date | null;
-    onDraftCreated?: (createdTaskIds: string[]) => Promise<void> | void;
-    onDraftSaved?: (overrides: Record<string, any>) => Promise<void> | void;
+    existingDraft?: boolean;
   }) => {
     const effectiveCreateDate = scheduleDate || createDate;
     if (!effectiveCreateDate || !calendarId) return;
@@ -548,9 +553,10 @@ const ContentCalendarRuntime: React.FC<{
         const processRunStageId = resolveProcessRunStageId(context.stageMap, stage);
         const metadata = asObject(stage?.metadata);
         const recurrence = asObject(stage?.recurrence_info);
+        const schedule = !existingDraft && stage.id === targetStage.id ? defaultSchedule : {};
         return {
           ...stage,
-          ...(String(stage?.id) === String(targetStage?.id) ? defaultSchedule : {}),
+          ...schedule,
           process_run_id: context.processRunId,
           process_run_stage_id: processRunStageId || null,
           process_link_map: {
@@ -562,7 +568,7 @@ const ContentCalendarRuntime: React.FC<{
             process_run_id: context.processRunId,
             process_run_stage_id: processRunStageId || null,
             content_calendar_id: calendarId,
-            ...(String(stage?.id) === String(targetStage?.id) ? defaultSchedule : {}),
+            ...schedule,
           },
           recurrence_info: {
             ...recurrence,
@@ -573,6 +579,7 @@ const ContentCalendarRuntime: React.FC<{
       });
       const selectedSource = stagesWithRuntime.find((stage) => String(stage?.id) === String(targetStage?.id));
       if (!selectedSource) throw new Error("مرحلهٔ پیش‌نویس انتخاب‌شده پیدا نشد.");
+      let canAppendDraft = !existingDraft;
 
       const laneMap = new Map<string, { id: string; title: string; stages: ProcessV2Stage[] }>();
       stagesWithRuntime.forEach((source, index) => {
@@ -626,18 +633,51 @@ const ContentCalendarRuntime: React.FC<{
           laneTitle: Array.from(laneMap.values()).find((lane) => lane.stages.includes(modalStage))?.title || "فعالیت‌های محتوا",
           onSaveDraftActivity: async (overrides) => {
             const savedStage = mergeTargetOverrides(overrides).find((stage) => String(stage?.id) === String(selectedSource.id));
+            if (!savedStage) throw new Error("مرحلهٔ پیش‌نویس برای ذخیره پیدا نشد.");
+            const calendarDraft = {
+              ...savedStage,
+              status: "draft",
+              is_draft: true,
+              content_calendar_id: calendarId,
+              content_type: contentType || savedStage.content_type || savedStage.metadata?.content_type || null,
+              calendar_date: selectedSource.calendar_date || `${dateKey}T12:00:00`,
+              metadata: {
+                ...asObject(savedStage.metadata),
+                start_date: savedStage.start_date ?? null,
+                due_date: savedStage.due_date ?? null,
+              },
+            };
+            const upsertDraft = (current: Record<string, any>[]) => {
+              const index = current.findIndex((stage) => stage.id === calendarDraft.id);
+              if (index === -1) {
+                if (!canAppendDraft) throw new Error("پیش‌نویس دیگر در تقویم وجود ندارد.");
+                return [...current, calendarDraft];
+              }
+              return current.map((stage, stageIndex) => stageIndex === index ? calendarDraft : stage);
+            };
             await saveProcessV2DraftStage({
               supabaseClient: supabase,
               stageId: selectedSource.process_run_stage_id,
-              stageName: savedStage?.stage_name || savedStage?.name,
-              assigneeUserId: savedStage?.assignee_id || savedStage?.default_assignee_id,
-              assigneeRoleId: savedStage?.assignee_role_id || savedStage?.default_assignee_role_id,
-              wage: savedStage?.wage,
-              plannedStartAt: savedStage?.start_date,
-              plannedDueAt: savedStage?.due_date,
-              metadata: asObject(savedStage?.metadata),
+              stageName: calendarDraft.stage_name || calendarDraft.name,
+              assigneeUserId: calendarDraft.assignee_id || calendarDraft.default_assignee_id,
+              assigneeRoleId: calendarDraft.assignee_role_id || calendarDraft.default_assignee_role_id,
+              wage: calendarDraft.wage,
+              plannedStartAt: calendarDraft.start_date,
+              plannedDueAt: calendarDraft.due_date,
+              metadata: asObject(calendarDraft.metadata),
             });
-            await onDraftSaved?.(asObject(overrides));
+            await updateContentCalendarDrafts(supabase, calendarId, upsertDraft);
+            canAppendDraft = false;
+            if (calendarIdRef.current !== calendarId) return;
+            setCalendarDraftStages((current) => [
+              ...current.filter((stage) => stage.id !== calendarDraft.id),
+              calendarDraft,
+            ]);
+            const savedDate = getCalendarDraftDate(calendarDraft) || effectiveCreateDate;
+            setRevealedDay({ calendarId, dayKey: toKey(savedDate) });
+            setAnchor((current) => toPersian(current).format("YYYY-MM") === toPersian(savedDate).format("YYYY-MM") ? current : savedDate);
+            setMode((current) => current === "projects" ? "all" : current);
+            void load(true);
           },
           onCreateDraftActivity: async (overrides) => {
             const result = await autoAssignProcessV2DraftStages({
@@ -656,13 +696,14 @@ const ContentCalendarRuntime: React.FC<{
                 .from("tasks")
                 .update({
                   content_calendar_id: calendarId,
-                  content_type: contentType || null,
+                  content_type: contentType || selectedSource.content_type || selectedSource.metadata?.content_type || null,
                   start_date: patch.start_date || defaultSchedule.start_date,
                   due_date: patch.due_date || defaultSchedule.due_date,
                 })
                 .in("id", ids);
               if (error) throw error;
-              await onDraftCreated?.(ids);
+              if (!canAppendDraft) await removeDraftFromOwner("content_calendars", calendarId, selectedSource);
+              canAppendDraft = false;
               await load();
             }
             if (!ids.length && result.missingAssigneeCount) {
@@ -776,18 +817,16 @@ const ContentCalendarRuntime: React.FC<{
   const openCalendarDraftActivity = async (item: RuntimeItem) => {
     const selectedDraft = item.draftStage;
     if (!selectedDraft?.id || !calendarId) return;
+    const { groupId, templateId, templateName, groupLabel } = getDraftStageProcessGroupMeta(selectedDraft);
     await openDraftActivity({
-      draftStages: calendarDraftStages,
+      draftStages: calendarDraftStages.filter((stage) => getDraftStageProcessGroupMeta(stage).groupId === groupId),
       targetStage: selectedDraft,
-      processTitle: "فعالیت‌های تقویم محتوایی",
+      processTitle: groupLabel || "فعالیت‌های تقویم محتوایی",
+      templateId,
+      templateTitle: templateName,
       scheduleDate: item.date,
       contentType: selectedDraft.content_type || selectedDraft.metadata?.content_type || null,
-      onDraftSaved: async (overrides) => {
-        await updateDraftInOwner("content_calendars", calendarId, selectedDraft, overrides);
-      },
-      onDraftCreated: async () => {
-        await removeDraftFromOwner("content_calendars", calendarId, selectedDraft);
-      },
+      existingDraft: true,
     });
   };
   const openProjectDraftActivity = async (item: RuntimeItem) => {
@@ -884,6 +923,7 @@ const ContentCalendarRuntime: React.FC<{
         const { error } = await supabase.from("tasks").update({
           project_id: isProjectDraft ? ownerId : null,
           content_calendar_id: calendarId,
+          ...(!isProjectDraft ? { content_type: selected.content_type || selected.metadata?.content_type || null } : {}),
           start_date: selected.start_date || `${dateKey}T09:00:00`,
           due_date: selected.due_date || `${dateKey}T17:00:00`,
         }).in("id", ids);
@@ -1085,7 +1125,13 @@ const ContentCalendarRuntime: React.FC<{
           </div>
         ) : null}
         <div className={list ? "space-y-2" : "space-y-1"}>
-          <CalendarDayEvents key={`${calendarId}:${day.key}`} items={rows} renderItem={(item) => renderEvent(item, list)} className={list ? 'space-y-2' : 'space-y-1'} />
+          <CalendarDayEvents
+            key={`${calendarId}:${day.key}`}
+            items={rows}
+            renderItem={(item) => renderEvent(item, list)}
+            className={list ? 'space-y-2' : 'space-y-1'}
+            reveal={revealedDay?.calendarId === calendarId && revealedDay.dayKey === day.key ? revealedDay : undefined}
+          />
         </div>
       </div>
       </CalendarDayDropTarget>
