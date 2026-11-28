@@ -326,6 +326,20 @@ const getThreadContext = (thread: any): AssistantContext | null => {
 };
 
 const PARTIAL_STREAM_NOTICE = 'ادامه پاسخ کامل دریافت نشد، اما متن دریافت‌شده حفظ شد. برای ادامه می‌توانید پیام «ادامه بده» را ارسال کنید.';
+const AI_REPLY_TIMEOUT_MESSAGE = 'در زمان مجاز پاسخی از مدل دریافت نشد. با درخواست دیگری یا یک مدل دیگر دوباره امتحان کنید.';
+
+const getAssistantErrorText = (error: any, fallback: string) => {
+  const reason = String(error?.finishReason || error?.finish_reason || '');
+  const status = Number(error?.status || error?.context?.status);
+  const detail = String(error?.message || '');
+  return status === 504 || status === 408 || error?.name === 'TimeoutError'
+    || /deadline|timeout/.test(reason)
+    || /timed?\s*out|timeout|workerrequestcancelled|cancelled by supervisor|wall clock|مهلت .*به پایان|مهلت .*تمام شد/iu.test(detail)
+    ? AI_REPLY_TIMEOUT_MESSAGE : toFaErrorMessage(error, fallback);
+};
+
+const buildSteeredAssistantPrompt = (previous: string, followUp: string) =>
+  `درخواست قبلی کاربر:\n${previous}\n\nدستور جدید کاربر برای هدایت همین درخواست (در صورت تعارض، این دستور اولویت دارد):\n${followUp}`;
 
 const isRecoverableStreamError = (payload: any) => {
   const finishReason = String(payload?.finishReason || payload?.finish_reason || '').trim();
@@ -554,6 +568,9 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   const threadLoadSequence = useRef(0);
   threadIdRef.current = threadId;
   const [submitting, setSubmitting] = useState(false);
+  const [stoppingTurn, setStoppingTurn] = useState(false);
+  const [queuedFollowUp, setQueuedFollowUp] = useState<string | null>(null);
+  const [followUpToSend, setFollowUpToSend] = useState<{ text: string; interruptedText?: string; scope: string } | null>(null);
   const [loadingThread, setLoadingThread] = useState(false);
   const notificationRuntime=useOptionalNotificationRuntime();
   const lastNotificationFetchRef=useRef('');
@@ -642,7 +659,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   const renamingThreadRef = useRef(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const shouldStickToBottomRef = useRef(true);
-  const streamAbortRef = useRef<AbortController | null>(null);
+  const activeTurnRef = useRef<{ controller: AbortController; text: string } | null>(null);
   const autoSubmittedInitialPromptRef = useRef('');
   const autoSubmittedInitialBundleRef = useRef('');
   const initializedPanelSessionRef = useRef<string | null>(null);
@@ -1037,16 +1054,20 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   );
   const activeRecordCreationSchema = recordCreationSchema || pendingRecordCreationSchema;
 
-  const callAssistant = useCallback(async (body: Record<string, any>) => {
+  const callAssistant = useCallback(async (body: Record<string, any>, signal?: AbortSignal) => {
+    signal?.throwIfAborted();
     const requestBody = {
       ...body,
       composerPreferences: body.composerPreferences ?? composerPreferencesRef.current,
     };
-    const { data, error } = await supabase.functions.invoke('ai-assistant', { body: requestBody });
+    const { data, error } = await supabase.functions.invoke('ai-assistant', { body: requestBody, ...(signal ? { signal } : {}) });
+    signal?.throwIfAborted();
     if (error) {
-      if (body.action === 'confirm_action' && error.context instanceof Response) {
+      if (error.context instanceof Response) {
         const failure = await error.context.clone().json().catch(() => null);
-        if (failure?.message) throw Object.assign(new Error(String(failure.message)), { payload: failure });
+        signal?.throwIfAborted();
+        const detail = failure?.message || failure?.msg;
+        if (detail) throw Object.assign(new Error(String(detail)), { status: error.context.status, payload: failure });
       }
       throw error;
     }
@@ -1126,26 +1147,29 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     }
   }, [contextWithSelection.mode, contextWithSelection.moduleId, contextWithSelection.recordId, message, openCreateActivityFromMessage]);
 
-  const stopActiveStream = useCallback(() => {
-    streamAbortRef.current?.abort();
-    streamAbortRef.current = null;
+  const stopActiveTurn = useCallback(() => {
+    const turn = activeTurnRef.current;
+    if (!turn || turn.controller.signal.aborted) return;
+    setStoppingTurn(true);
+    turn.controller.abort();
   }, []);
 
   const callAssistantStream = useCallback(async (
     body: Record<string, any>,
     handlers: {
       onMeta?: (payload: any) => void;
+      onAccepted?: (payload: { threadId: string; userMessageId: string }) => void;
       onActivity?: (payload: unknown) => void;
       onDelta?: (text: string) => void;
       onDone?: (payload: any) => void;
       onError?: (payload: any) => void;
     },
+    signal: AbortSignal,
   ) => {
     const sessionResult = await supabase.auth.getSession();
     const token = sessionResult.data.session?.access_token;
     if (!token) throw new Error('نشست شما معتبر نیست. دوباره وارد حساب کاربری شوید.');
-    const controller = new AbortController();
-    streamAbortRef.current = controller;
+    signal.throwIfAborted();
     const response = await fetch(`${SUPABASE_URL.replace(/\/+$/, '')}/functions/v1/ai-assistant`, {
       method: 'POST',
       headers: withOrganizationClientInfo(new Headers({
@@ -1154,29 +1178,32 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         'Content-Type': 'application/json',
       })),
       body: JSON.stringify({ ...body, action: 'chat_stream', composerPreferences: body.composerPreferences ?? composerPreferencesRef.current }),
-      signal: controller.signal,
+      signal,
     });
     if (!response.ok) {
       const raw = await response.text();
       const parsed = (() => {
         try { return JSON.parse(raw); } catch { return null; }
       })();
-      throw new Error(String(parsed?.message || raw || 'ارتباط با دستیار ناموفق بود.'));
+      throw Object.assign(new Error(String(parsed?.message || raw || 'ارتباط با دستیار ناموفق بود.')), { status: response.status });
     }
     if (!response.body || !response.headers.get('content-type')?.includes('text/event-stream')) {
-      if (streamAbortRef.current === controller) streamAbortRef.current = null;
       const raw = await response.text().catch(() => '');
       const data = (() => { try { return JSON.parse(raw); } catch { return null; } })();
       throw new Error(String(data?.message || 'پاسخ زنده از دستیار دریافت نشد.'));
     }
 
     const reader = response.body.getReader();
+    const cancelReader = () => { void reader.cancel().catch(() => undefined); };
+    signal.addEventListener('abort', cancelReader, { once: true });
+    if (signal.aborted) cancelReader();
     const decoder = new TextDecoder();
     let buffer = '';
     let terminalEventReceived = false;
     let streamedText = '';
     let acceptedTurn: { threadId: string; userMessageId: string } | null = null;
     const handleEvent = (rawEvent: string) => {
+      signal.throwIfAborted();
       const eventName = rawEvent.split(/\r?\n/).find((line) => line.startsWith('event:'))?.slice(6).trim() || 'message';
       const dataText = rawEvent
         .split(/\r?\n/)
@@ -1187,7 +1214,10 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       let payload: any = null;
       try { payload = JSON.parse(dataText); } catch { payload = { text: dataText }; }
       if (eventName === 'accepted' || eventName === 'meta') {
-        if (payload?.threadId && payload?.userMessageId) acceptedTurn = { threadId: payload.threadId, userMessageId: payload.userMessageId };
+        if (payload?.threadId && payload?.userMessageId) {
+          if (!acceptedTurn) handlers.onAccepted?.({ threadId: payload.threadId, userMessageId: payload.userMessageId });
+          acceptedTurn = { threadId: payload.threadId, userMessageId: payload.userMessageId };
+        }
         if (eventName === 'meta') handlers.onMeta?.(payload);
       }
       if (eventName === 'agent_activity') handlers.onActivity?.(payload);
@@ -1209,10 +1239,10 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     const recoverSavedAnswer = async (turn: { threadId: string; userMessageId: string }) => {
       for (const delay of [0, 800, 1800, 3200]) {
         if (delay) await new Promise<void>((resolve) => window.setTimeout(resolve, delay));
-        if (controller.signal.aborted) return false;
-        const saved = await callAssistant({ action: 'get_thread', threadId: turn.threadId, afterUserMessageId: turn.userMessageId }).catch(() => null);
+        if (signal.aborted) return false;
+        const saved = await callAssistant({ action: 'get_thread', threadId: turn.threadId, afterUserMessageId: turn.userMessageId }, signal).catch(() => null);
         const answer = saved?.messages?.[0];
-        if (!answer || controller.signal.aborted) continue;
+        if (!answer || signal.aborted) continue;
         const metadata = answer.metadata || {};
         const result = {
           ...turn,
@@ -1250,12 +1280,15 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       buffer += decoder.decode();
       if (!terminalEventReceived && buffer.trim()) handleEvent(buffer);
     } catch (error) {
-      if (controller.signal.aborted) throw error;
+      if (signal.aborted) throw error;
     } finally {
+      signal.removeEventListener('abort', cancelReader);
       await reader.cancel().catch(() => {});
     }
+    signal.throwIfAborted();
     const recovered = !terminalEventReceived && acceptedTurn && await recoverSavedAnswer(acceptedTurn);
-    if (!terminalEventReceived && !recovered && !controller.signal.aborted) {
+    signal.throwIfAborted();
+    if (!terminalEventReceived && !recovered) {
       handlers.onError?.({
         success: false,
         message: 'ارتباط زنده با دستیار پیش از پایان پاسخ قطع شد.',
@@ -1264,7 +1297,6 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         partialContent: streamedText,
       });
     }
-    if (streamAbortRef.current === controller) streamAbortRef.current = null;
   }, [callAssistant]);
 
   const buildBundleInputPayloads = useCallback(async () => Promise.all(bundleInputs.map(async (item) => {
@@ -1335,6 +1367,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     inputKind: string;
     bundlePayload?: any[];
     forceNewThread?: boolean;
+    signal?: AbortSignal;
   }) => {
     const data = await callAssistant({
       action: 'suggest_auto_capabilities',
@@ -1347,7 +1380,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       modelOverride: modelOverrideRef.current,
       capabilities: selectedCapabilities,
       ...(effectiveAgents.length ? { agents: effectiveAgents } : {}),
-    });
+    }, params.signal);
     const rawSuggestedCapabilities = Array.from(new Set(
       Array.isArray(data?.capabilities)
         ? data.capabilities.map((item: any) => String(item || '').trim()).filter(Boolean)
@@ -1374,13 +1407,20 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     bundlePayload?: any[];
     forceNewThread?: boolean;
     route?: any;
+    signal?: AbortSignal;
+    userMessageText?: string;
   }) => {
+    const invoke = (body: Record<string, any>) => callAssistant({
+      ...body,
+      ...(params.userMessageText !== undefined ? { userMessageText: params.userMessageText } : {}),
+    }, params.signal);
     let bundlePayload = Array.isArray(params.bundlePayload) ? params.bundlePayload : [];
     const route = params.route || await requestAutoRoute({
       messageText: params.messageText,
       inputKind: params.inputKind,
       bundlePayload,
       forceNewThread: params.forceNewThread,
+      signal: params.signal,
     });
     bundlePayload = bundlePayload.map((item) => {
       const transcript = route.voiceTranscripts?.find((entry: any) => String(entry?.inputId || '') === String(item?.id || ''));
@@ -1415,7 +1455,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     // a chain of specialized operators.  Creation actions intentionally keep
     // their dedicated confirmation cards below.
     if (route.primaryModelOnly && !needsDedicatedGenerationOperator && !needsStructuredAction) {
-      return await withAgentPlan(callAssistant({
+      return await withAgentPlan(invoke({
         action: bundlePayload.length > 0 ? 'run_task_bundle' : 'chat',
         primaryModelOnly: true,
         capabilities: routeCapabilities,
@@ -1460,7 +1500,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         sourceImages: autoSourceImages,
         sourceImageUrls: imageEditSourceUrl ? [imageEditSourceUrl] : [],
       };
-      if (skipGenerationConfirmationByKind.image_generation === true) return await withAgentPlan(callAssistant(confirmBody));
+      if (skipGenerationConfirmationByKind.image_generation === true) return await withAgentPlan(invoke(confirmBody));
       return await withAgentPlan(buildLocalGenerationConfirmation({
         kind: 'image_generation',
         prompt,
@@ -1485,7 +1525,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         modelOverride: modelOverrideRef.current,
         settings: mediaSettings,
       };
-      if (skipGenerationConfirmationByKind.voice_output === true) return await withAgentPlan(callAssistant(confirmBody));
+      if (skipGenerationConfirmationByKind.voice_output === true) return await withAgentPlan(invoke(confirmBody));
       return await withAgentPlan(buildLocalGenerationConfirmation({
         kind: 'voice_output',
         prompt,
@@ -1510,7 +1550,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         settings: mediaSettings,
         sourceImages: autoSourceImages,
       };
-      if (skipGenerationConfirmationByKind.video_generation === true) return await withAgentPlan(callAssistant(confirmBody));
+      if (skipGenerationConfirmationByKind.video_generation === true) return await withAgentPlan(invoke(confirmBody));
       return await withAgentPlan(buildLocalGenerationConfirmation({
         kind: 'video_generation',
         prompt,
@@ -1554,7 +1594,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           modelOverride: modelOverrideRef.current,
           settings: mediaSettings,
         };
-      if (skipGenerationConfirmationByKind.document_generation === true) return await withAgentPlan(callAssistant(confirmBody));
+      if (skipGenerationConfirmationByKind.document_generation === true) return await withAgentPlan(invoke(confirmBody));
       return await withAgentPlan(buildLocalGenerationConfirmation({
         kind: 'document_generation',
         prompt,
@@ -1586,7 +1626,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       || capabilitySet.has('document_analysis')
       || capabilitySet.has('record_creation')
       || capabilitySet.has('process_operation')) {
-      return await withAgentPlan(callAssistant({
+      return await withAgentPlan(invoke({
         action: 'run_task_bundle',
         capabilities: routeCapabilities,
         ...(effectiveAgents.length ? { agents: effectiveAgents } : {}),
@@ -1609,7 +1649,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       }));
     }
 
-    return await withAgentPlan(callAssistant({
+    return await withAgentPlan(invoke({
       action: 'chat',
       capability: routeCapabilities.includes('legal_assistant')
         ? 'legal_assistant'
@@ -1854,6 +1894,12 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   }, []);
 
   const initialPanelSessionKey = `${contextKey}:${normalizedInitialThreadId || 'new'}`;
+  const followUpScope = `${draftScope || ''}:${initialPanelSessionKey}`;
+
+  useEffect(() => {
+    if (!active) return;
+    setQueuedFollowUp(null);
+  }, [active, followUpScope]);
 
   useEffect(() => {
     if (!active) {
@@ -1867,6 +1913,9 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     if (initializedPanelSessionRef.current === initialPanelSessionKey) return;
     threadLoadSequence.current += 1;
     initializedPanelSessionRef.current = initialPanelSessionKey;
+    activeTurnRef.current?.controller.abort();
+    setQueuedFollowUp(null);
+    setFollowUpToSend(null);
     setLoadingThread(false);
     setThreadId(normalizedInitialThreadId);
     setThreadContext(null);
@@ -2010,12 +2059,20 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
 
   const submitChat = useCallback(async (rawText?: string, inputKind = 'text', clarification?: {
     messageId: string; form: AiQuestionForm; fieldAnswers: Record<string, unknown>;
-  }) => {
+  }, interruptedText?: string) => {
     const text = String(rawText ?? input).trim();
-    if (!text || submitting) return;
-    const assistantText = pendingAiAction && (activeRecordCreationSchema || ['manage_agent_task', 'agent_task_batch'].includes(pendingAiAction.actionType))
+    if (!text || activeTurnRef.current) return;
+    const controller = new AbortController();
+    const signal = controller.signal;
+    const invoke = (body: Record<string, any>) => callAssistant({
+      ...body,
+      ...(interruptedText ? { userMessageText: text } : {}),
+    }, signal);
+    const assistantText = interruptedText ? buildSteeredAssistantPrompt(interruptedText, text)
+      : pendingAiAction && (activeRecordCreationSchema || ['manage_agent_task', 'agent_task_batch'].includes(pendingAiAction.actionType))
       ? buildPendingActionRevisionPrompt(pendingAiAction, text)
       : text;
+    activeTurnRef.current = { controller, text: assistantText };
     const shouldStartProcessGuideThread = false;
     if (rawText === undefined) setInput('');
     if (!threadId) {
@@ -2042,6 +2099,10 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         let serverError: any = null;
         let receivedStreamText = false;
         await callAssistantStream(streamBody, {
+          onAccepted: (turn) => {
+            setThreadId(turn.threadId);
+            setMessages(prev => prev.map(item => item.id === userMessage.id ? { ...item, id: turn.userMessageId } : item));
+          },
           onActivity: (payload) => {
             const activity = parseAiAgentActivity(payload);
             if (!activity) return;
@@ -2121,7 +2182,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           },
           onError: (payload) => {
             serverError = payload;
-            const errorText = toFaErrorMessage(payload, String(payload?.message || 'ارتباط با دستیار ناموفق بود.'));
+            const errorText = getAssistantErrorText(payload, String(payload?.message || 'ارتباط با دستیار ناموفق بود.'));
             const recoverableError = isRecoverableStreamError(payload);
             if (payload?.threadId) setThreadId(String(payload.threadId));
             setMessages((prev) => prev.map((item) => item.id === thinkingMessage.id
@@ -2141,13 +2202,13 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
               }
               : item));
           },
-        });
+        }, signal);
         if (serverError) {
           if (isRecoverableStreamError(serverError)) {
             message?.warning?.(receivedStreamText || normalizeAiMessageText(serverError?.partialContent || serverError?.partial_content || serverError?.answer)
-              ? PARTIAL_STREAM_NOTICE : toFaErrorMessage(serverError, 'پاسخ کامل دریافت نشد.'));
+              ? PARTIAL_STREAM_NOTICE : getAssistantErrorText(serverError, 'پاسخ کامل دریافت نشد.'));
           } else {
-            message?.error?.(toFaErrorMessage(serverError, String(serverError?.message || 'ارتباط با دستیار ناموفق بود.')));
+            message?.error?.(getAssistantErrorText(serverError, String(serverError?.message || 'ارتباط با دستیار ناموفق بود.')));
           }
         }
       };
@@ -2158,6 +2219,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         : 'create';
       if (!clarification && activeRecordCreationSchema) {
         const route = await requestAutoRoute({
+          signal,
           messageText: assistantText,
           inputKind,
           forceNewThread: shouldStartProcessGuideThread,
@@ -2185,6 +2247,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           && /^(?:ادامه(?:\s+بده|\s+دهید)?|ادامه[‌ ]اش(?:\s+رو)?(?:\s+بگو)?)[.!؟?\s]*$/u.test(assistantText);
         if (!directContinuation && (selectedCapabilities.length === 0 || selectedCapabilities.every((item) => ['text_chat', 'document_analysis', 'voice_input', 'record_creation'].includes(item)))) {
           const route = await requestAutoRoute({
+            signal,
             messageText: assistantText,
             inputKind,
             forceNewThread: shouldStartProcessGuideThread,
@@ -2222,6 +2285,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
             capabilities: streamCapabilities,
             ...(effectiveAgents.length ? { agents: effectiveAgents } : {}),
             message: assistantText,
+            ...(interruptedText ? { userMessageText: text } : {}),
             inputKind,
             threadId: shouldStartProcessGuideThread ? null : threadId,
             forceNewThread: shouldStartProcessGuideThread,
@@ -2233,7 +2297,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         }
       }
 
-      const data = await (clarification ? callAssistant({
+      const data = await (clarification ? invoke({
         action: clarification.form.actionType,
         message: assistantText,
         inputKind,
@@ -2246,12 +2310,14 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         previewOnly: true,
       }) : plannedAutoRoute && !processOperationMode && !activeRecordCreationSchema
         ? executeAutoRoute({
+          signal,
           messageText: assistantText,
           inputKind,
           forceNewThread: shouldStartProcessGuideThread,
           route: plannedAutoRoute,
+          userMessageText: interruptedText ? text : undefined,
         })
-        : callAssistant(processOperationMode ? {
+        : invoke(processOperationMode ? {
         action: 'process_operation_from_prompt',
         capability: 'record_chat',
         capabilities: selectedCapabilities.filter((capability) => capability !== 'text_chat'),
@@ -2388,12 +2454,11 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         },
       ]);
     } catch (error: any) {
-      if (error?.name === 'AbortError') {
-        streamAbortRef.current = null;
+      if (signal.aborted) {
         setMessages((prev) => prev.map((item) => item.id === thinkingMessage.id
           ? {
             ...item,
-            content: normalizeAiMessageText(item.content) || 'دریافت پاسخ متوقف شد.',
+            content: (item.metadata?.streaming ? normalizeAiMessageText(item.content) : '') || 'دریافت پاسخ متوقف شد.',
             metadata: {
               ...(item.metadata || {}),
               pending_status: false,
@@ -2405,8 +2470,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           : item));
         return;
       }
-      streamAbortRef.current = null;
-      const errorText = toFaErrorMessage(error, 'ارتباط با دستیار ناموفق بود.');
+      const errorText = getAssistantErrorText(error, 'ارتباط با دستیار ناموفق بود.');
       message.error(errorText);
       if (clarification) {
         setMessages(prev => prev.filter(item => item.id !== userMessage.id && item.id !== thinkingMessage.id));
@@ -2423,16 +2487,18 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         ]);
         return;
       }
-      if (rawText === undefined) setInput(current => current ? current : text);
+      if (!clarification) setInput(current => current || text);
       setMessages(prev => prev.map(item => item.id === thinkingMessage.id ? {
         ...item, content: errorText,
         metadata: { ...item.metadata, pending_status: false, streaming: false, failed: true },
       } : item));
     } finally {
+      activeTurnRef.current = null;
+      setStoppingTurn(false);
       setSubmitting(false);
     }
     return undefined;
-  }, [activeRecordCreationSchema, applyThreadTitleFromResponse, callAssistant, callAssistantStream, contextWithSelection, effectiveAgents, executeAutoRoute, input, message, pendingAiAction, processOperationMode, requestAutoRoute, selectedCapabilities, setInput, submitting, threadId]);
+  }, [activeRecordCreationSchema, applyThreadTitleFromResponse, callAssistant, callAssistantStream, contextWithSelection, effectiveAgents, executeAutoRoute, input, message, pendingAiAction, processOperationMode, requestAutoRoute, selectedCapabilities, setInput, threadId]);
 
   useEffect(() => {
     const prompt = String(initialPrompt || '').trim();
@@ -2724,12 +2790,16 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     removeDisabled: submitting,
   })), [bundleInputs, removeBundleInput, submitting]);
 
-  const submitTaskBundle = useCallback(async () => {
-    const prompt = input.trim();
-    if (submitting || (!prompt && bundleInputs.length === 0)) return;
-    const assistantPrompt = pendingAiAction && (activeRecordCreationSchema || ['manage_agent_task', 'agent_task_batch'].includes(pendingAiAction.actionType)) && prompt
+  const submitTaskBundle = useCallback(async (rawText?: string, interruptedText?: string) => {
+    const prompt = (rawText ?? input).trim();
+    if (activeTurnRef.current || (!prompt && bundleInputs.length === 0)) return;
+    const controller = new AbortController();
+    const signal = controller.signal;
+    const assistantPrompt = interruptedText ? buildSteeredAssistantPrompt(interruptedText, prompt)
+      : pendingAiAction && (activeRecordCreationSchema || ['manage_agent_task', 'agent_task_batch'].includes(pendingAiAction.actionType)) && prompt
       ? buildPendingActionRevisionPrompt(pendingAiAction, prompt)
       : prompt;
+    activeTurnRef.current = { controller, text: assistantPrompt };
     const effectiveCapabilities = (() => {
       const next = [...selectedCapabilities];
       if (selectedCapabilities.length > 0 && bundleInputs.some((item) => item.type === 'file' || item.type === 'image') && !next.includes('document_analysis')) {
@@ -2740,7 +2810,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       }
       return next;
     })();
-    setInput('');
+    if (rawText === undefined) setInput('');
     setPendingAiAction(null);
     const userMessage: ChatMessage = {
       id: `user-bundle-${Date.now()}`,
@@ -2788,8 +2858,10 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     setSubmitting(true);
     try {
       const inputs = await buildBundleInputPayloads();
+      signal.throwIfAborted();
       const recordRoute = activeRecordCreationSchema
         ? await requestAutoRoute({
+          signal,
           messageText: assistantPrompt,
           inputKind: 'task_bundle',
           bundlePayload: inputs,
@@ -2808,16 +2880,18 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       }
       const data = await (effectiveCapabilities.every((item) => ['text_chat', 'document_analysis', 'voice_input', 'record_creation'].includes(item)) && !processOperationMode && !activeRecordCreationSchema
         ? executeAutoRoute({
+          signal,
           messageText: assistantPrompt,
           inputKind: 'task_bundle',
           bundlePayload: inputs,
+          userMessageText: interruptedText ? prompt : undefined,
         })
         : callAssistant({
           action: 'run_task_bundle',
           capabilities: effectiveCapabilities,
           ...(effectiveAgents.length ? { agents: effectiveAgents } : {}),
           message: assistantPrompt || (activeRecordCreationSchema ? 'از ورودی‌های پیوست‌شده یک رکورد جدید بساز.' : processOperationMode ? 'با توجه به ورودی‌های پیوست‌شده، اقدام لازم را پیشنهاد بده.' : 'ورودی‌های پیوست‌شده را تحلیل کن.'),
-          userMessageText: assistantPrompt,
+          userMessageText: interruptedText ? prompt : assistantPrompt,
           inputKind: 'task_bundle',
           bundle: { inputs },
           voipCallLogId: String(initialVoipCallLogId || '').trim() || null,
@@ -2828,7 +2902,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           recordCreation: activeRecordCreationSchema,
           recordMutationMode,
           previewOnly: true,
-        }));
+        }, signal));
       if (data?.proposedAction?.id) setPendingAiAction(data.proposedAction);
       if (data.threadId) setThreadId(String(data.threadId));
       if (data?.autoAction === 'generate_image') {
@@ -2932,8 +3006,15 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         return [];
       });
     } catch (error: any) {
-      setInput(prompt);
-      const errorText = toFaErrorMessage(error, 'ارسال درخواست هوش مصنوعی ناموفق بود.');
+      if (signal.aborted) {
+        setMessages(prev => prev.map(item => item.id === thinkingMessage.id ? {
+          ...item, content: 'دریافت پاسخ متوقف شد.',
+          metadata: { ...item.metadata, pending_status: false, streaming: false, stopped: true },
+        } : item));
+        return;
+      }
+      setInput(current => current || prompt);
+      const errorText = getAssistantErrorText(error, 'ارسال درخواست هوش مصنوعی ناموفق بود.');
       const payload = error?.payload && typeof error.payload === 'object' ? error.payload : null;
       const payloadThreadId = String(payload?.threadId || payload?.thread?.id || '').trim();
       const serverMessages = Array.isArray(payload?.messages) ? payload.messages as ChatMessage[] : [];
@@ -2959,9 +3040,18 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       }
       message.error(errorText);
     } finally {
+      activeTurnRef.current = null;
+      setStoppingTurn(false);
       setSubmitting(false);
     }
-  }, [activeRecordCreationSchema, buildBundleInputPayloads, bundleInputs, callAssistant, contextWithSelection, effectiveAgents, executeAutoRoute, initialVoipCallLogId, input, message, pendingAiAction, processOperationMode, requestAutoRoute, selectedCapabilities, submitting, threadId]);
+  }, [activeRecordCreationSchema, buildBundleInputPayloads, bundleInputs, callAssistant, contextWithSelection, effectiveAgents, executeAutoRoute, initialVoipCallLogId, input, message, pendingAiAction, processOperationMode, requestAutoRoute, selectedCapabilities, threadId]);
+
+  useEffect(() => {
+    if (!active || !followUpToSend || submitting || followUpToSend.scope !== followUpScope) return;
+    setFollowUpToSend(null);
+    if (shouldUseTaskBundle) void submitTaskBundle(followUpToSend.text, followUpToSend.interruptedText);
+    else void submitChat(followUpToSend.text, 'text', undefined, followUpToSend.interruptedText);
+  }, [active, followUpToSend, followUpScope, shouldUseTaskBundle, submitChat, submitTaskBundle, submitting]);
 
   useEffect(() => {
     if (!active || !autoSubmitInitialPrompt || !initialFile || submitting || loadingThread || bundleInputs.length === 0) return;
@@ -3203,6 +3293,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   const startFreshConversation = useCallback(() => {
     if (submitting || loadingThread) return;
     setThreadListOpen(false);
+    setQueuedFollowUp(null);
+    setFollowUpToSend(null);
     if (onNewConversation) {onNewConversation();return;}
     if (conversationContext.mode==='record') restoredRecordThreadScopeRef.current=`${conversationContext.moduleId}:${conversationContext.recordId}`;
     if (draftScope) rememberAiDraftConversation(draftScope, draftContextKey, null);
@@ -3345,7 +3437,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
             {isUser ? messageText : waitingForResponse ? (
               <AiActivityStatus agentId={respondingAgent} activities={activeAgents}
                 pendingDetail={item.metadata?.kind === 'voice_input' ? messageText : undefined}
-                onStop={isStreaming ? stopActiveStream : undefined} />
+                onStop={isStreaming ? stopActiveTurn : undefined} />
             ) : (
               <AiMessageRenderer
                 agentId={effectiveAgentKey || respondingAgent}
@@ -3356,7 +3448,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
                 stopped={isStopped}
                 sources={extractAiSourcesFromMetadata(item.metadata, messageText)}
                 onCopyText={copyText}
-                onStop={isStreaming ? stopActiveStream : undefined}
+                onStop={isStreaming ? stopActiveTurn : undefined}
                 onRetry={retryText ? () => void submitChat(retryText, 'text') : undefined}
               />
             )}
@@ -3640,7 +3732,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     personalTitle,
     recheckPending,
     recheckingId,
-    stopActiveStream,
+    stopActiveTurn,
     submitChat,
   ]);
 
@@ -4100,12 +4192,35 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           </div>
         ) : null}
         <AiMessageComposer value={input} onChange={setInput}
-          onSubmit={() => void (shouldUseTaskBundle ? submitTaskBundle() : documentMode ? submitDocumentPrompt() : videoMode ? submitVideoPrompt() : voiceOutputMode ? submitVoiceOutputPrompt() : imageMode ? submitImagePrompt() : submitChat())}
-          canSubmit={Boolean(input.trim() || bundleInputs.length)} busy={submitting || generatingImage || generatingVoiceOutput || generatingVideo || generatingDocument}
+          onSubmit={() => {
+            if (submitting) {
+              const text = input.trim();
+              if (!text || queuedFollowUp !== null || followUpToSend || stoppingTurn) return;
+              setQueuedFollowUp(text);
+              setInput('');
+              return;
+            }
+            void (shouldUseTaskBundle ? submitTaskBundle() : documentMode ? submitDocumentPrompt() : videoMode ? submitVideoPrompt() : voiceOutputMode ? submitVoiceOutputPrompt() : imageMode ? submitImagePrompt() : submitChat());
+          }}
+          onStop={submitting && !stoppingTurn ? stopActiveTurn : undefined}
+          canSubmitWhileBusy={submitting && !stoppingTurn && queuedFollowUp === null && !followUpToSend && Boolean(input.trim())}
+          canSubmit={Boolean(input.trim() || (!submitting && bundleInputs.length))}
+          busy={submitting || generatingImage || generatingVoiceOutput || generatingVideo || generatingDocument}
+          queuedFollowUp={queuedFollowUp !== null ? {
+            text: queuedFollowUp,
+            onChange: setQueuedFollowUp,
+            onCancel: () => setQueuedFollowUp(null),
+            onSend: () => {
+              const interruptedText = activeTurnRef.current?.text;
+              setFollowUpToSend({ text: queuedFollowUp.trim(), interruptedText, scope: followUpScope });
+              setQueuedFollowUp(null);
+              stopActiveTurn();
+            },
+          } : null}
           placeholder="سوال خود را بنویسید..."
           suggestions={composerSuggestions}
           onSelectSuggestion={handleSelectSuggestion}
-          sendLabel={shouldUseTaskBundle ? 'ارسال' : documentMode ? 'ساخت فایل' : videoMode ? 'ساخت ویدیو' : voiceOutputMode ? 'تولید صدا' : imageMode ? 'ساخت تصویر' : processOperationMode ? 'پیشنهاد اقدام' : activeRecordCreationSchema ? 'آماده‌سازی پیش‌نویس' : 'ارسال'}
+          sendLabel={submitting ? 'آماده‌کردن پیام بعدی' : shouldUseTaskBundle ? 'ارسال' : documentMode ? 'ساخت فایل' : videoMode ? 'ساخت ویدیو' : voiceOutputMode ? 'تولید صدا' : imageMode ? 'ساخت تصویر' : processOperationMode ? 'پیشنهاد اقدام' : activeRecordCreationSchema ? 'آماده‌سازی پیش‌نویس' : 'ارسال'}
           tools={<AiCapabilityComposerActions
             selected={selectedCapabilities}
             autoSuggested={autoSuggestedCapabilities}

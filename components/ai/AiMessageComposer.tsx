@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { Button, Input, Tooltip } from 'antd';
 import { Suggestion, type SuggestionProps } from '@ant-design/x';
-import { ArrowUpOutlined } from '@ant-design/icons';
+import { ArrowUpOutlined, LoadingOutlined } from '@ant-design/icons';
 import { AiComposerSlots } from './AiComposerSlots';
 import './AiMessageComposer.css';
 
@@ -10,6 +10,32 @@ export type AiComposerSuggestionItem = NonNullable<SuggestionProps<string>['item
     ? Item
     : never
   : never;
+
+type QueuedFollowUp = {
+  text: string;
+  onChange: (text: string) => void;
+  onSend: () => void;
+  onCancel: () => void;
+};
+
+function QueuedFollowUpCard({ text, onChange, onSend, onCancel }: QueuedFollowUp) {
+  const [editing, setEditing] = useState(false);
+  return (
+    <section className="ai-composer-follow-up" aria-label="پیام بعدی">
+      {editing ? (
+        <Input.TextArea aria-label="ویرایش پیام بعدی" value={text} autoFocus autoSize={{ minRows: 1, maxRows: 4 }}
+          onChange={(event) => onChange(event.target.value)} />
+      ) : <div className="ai-composer-follow-up-text">{text}</div>}
+      <div className="ai-composer-follow-up-actions">
+        <Button size="small" type="primary" disabled={!text.trim()} onClick={onSend}>ارسال</Button>
+        <Button size="small" type="text" onClick={() => setEditing((current) => !current)}>
+          {editing ? 'پایان ویرایش' : 'ویرایش'}
+        </Button>
+        <Button size="small" type="text" onClick={onCancel}>لغو</Button>
+      </div>
+    </section>
+  );
+}
 
 type Props = React.PropsWithChildren<{
   value: string;
@@ -20,6 +46,9 @@ type Props = React.PropsWithChildren<{
   reserveMenuSpace?: boolean;
   canSubmit?: boolean;
   busy?: boolean;
+  onStop?: () => void;
+  canSubmitWhileBusy?: boolean;
+  queuedFollowUp?: QueuedFollowUp | null;
   disabled?: boolean;
   sendLabel?: string;
   placeholder?: string;
@@ -67,6 +96,9 @@ export default function AiMessageComposer({
   reserveMenuSpace = false,
   canSubmit = Boolean(value.trim()),
   busy = false,
+  onStop,
+  canSubmitWhileBusy = false,
+  queuedFollowUp,
   disabled = false,
   sendLabel = 'ارسال پیام',
   placeholder = 'پیامتان را بنویسید… (برای دستورات / یا @ بزنید)',
@@ -80,9 +112,18 @@ export default function AiMessageComposer({
   const [suggestionOpen, setSuggestionOpen] = useState(false);
   const [lastTriggerMatch, setLastTriggerMatch] = useState('');
   const slots = useMemo(() => ({ embedded: true, selections, transient }), [selections, transient]);
-  const submit = () => {
-    if (canSubmit && !busy && !disabled) onSubmit();
-  };
+  const sendEnabled = canSubmit && !disabled && (!busy || canSubmitWhileBusy);
+  const stopInSendSlot = busy && !sendEnabled && Boolean(onStop);
+  const submit = () => { if (sendEnabled) onSubmit(); };
+  const stopButton = () => (
+    <Tooltip title="توقف پاسخ">
+      <Button type="primary" shape="circle" className="ai-composer-send ai-composer-stop"
+        aria-label="توقف پاسخ" onClick={onStop}>
+        <LoadingOutlined className="ai-composer-stop-progress" spin aria-hidden="true" />
+        <span className="ai-composer-stop-square" aria-hidden="true" />
+      </Button>
+    </Tooltip>
+  );
 
   const renderTextarea = (triggerProps?: {
     onTrigger?: (info?: string | false) => void;
@@ -115,7 +156,7 @@ export default function AiMessageComposer({
         const sendShortcut = enter && event.ctrlKey && !event.shiftKey && !event.altKey && !event.metaKey;
         if (sendShortcut) {
           event.preventDefault();
-          if (event.repeat || busy || disabled || !canSubmit) return;
+          if (event.repeat || !sendEnabled) return;
           setSuggestionOpen(false);
           submit();
           return;
@@ -138,6 +179,7 @@ export default function AiMessageComposer({
   return (
     <AiComposerSlots.Provider value={slots}>
       <div className={`ai-message-composer${reserveMenuSpace ? ' ai-message-composer-with-menu' : ''}`} dir="rtl" aria-busy={busy}>
+        {queuedFollowUp ? <QueuedFollowUpCard {...queuedFollowUp} /> : null}
         {children}
         <div ref={setSelections} className="ai-composer-selections" aria-label="عملکردهای انتخاب‌شده" />
         <div ref={setTransient} className="ai-composer-transient" />
@@ -169,7 +211,8 @@ export default function AiMessageComposer({
         <div className="ai-composer-footer">
           <div className="ai-composer-tools">{tools}</div>
           <div className="ai-composer-model">{model}</div>
-          <Tooltip title={`${sendLabel} (Ctrl+Enter)`}>
+          {busy && onStop ? stopButton() : null}
+          {!stopInSendSlot ? <Tooltip title={`${sendLabel} (Ctrl+Enter)`}>
             <Button
               type="primary"
               shape="circle"
@@ -177,13 +220,13 @@ export default function AiMessageComposer({
               icon={<ArrowUpOutlined />}
               aria-label={sendLabel}
               aria-keyshortcuts="Control+Enter"
-              disabled={!canSubmit || disabled}
-              loading={busy}
+              disabled={!sendEnabled}
+              loading={busy && !onStop}
               onClick={submit}
             >
               <span className="sr-only">{sendLabel}</span>
             </Button>
-          </Tooltip>
+          </Tooltip> : null}
         </div>
       </div>
     </AiComposerSlots.Provider>

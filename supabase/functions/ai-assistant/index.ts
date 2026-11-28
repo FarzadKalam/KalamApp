@@ -249,16 +249,20 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-const FUNCTION_BUILD = 'ai-assistant-2026-11-27-specific-activity';
+const FUNCTION_BUILD = 'ai-assistant-2026-11-28-steering';
 const PROVIDER_REQUEST_TIMEOUT_MS = 45000;
 // A streamed reply can legitimately take longer than a normal request.  Do
 // not abort a healthy stream merely because its total duration passes the
 // normal request timeout; only abort when the provider stays silent.
 const STREAM_PROVIDER_INACTIVITY_TIMEOUT_MS = 90000;
 const STREAM_HEARTBEAT_INTERVAL_MS = 15000;
-// Edge Runtime has a hard request wall-clock limit near 50 seconds. Reserve
-// enough time to persist a recovered tool result instead of losing the turn.
-const STREAM_REQUEST_SOFT_DEADLINE_MS = 45000;
+// The deployed assistant worker has 120 seconds. Keep time to save the answer.
+const STREAM_REQUEST_SOFT_DEADLINE_MS = 105000;
+const CONVERSATION_PROVIDER_TIMEOUT_MS = 90000;
+const AI_REPLY_TIMEOUT_MESSAGE = 'در زمان مجاز پاسخی از مدل دریافت نشد. با درخواست دیگری یا یک مدل دیگر دوباره امتحان کنید.';
+const assistantTurn = Symbol('assistantTurn');
+type AssistantTurn = { signal: AbortSignal; deadlineAt: number };
+const getAssistantTurn = (body: any): AssistantTurn | undefined => body?.[assistantTurn];
 const STREAM_DEADLINE_PERSISTENCE_RESERVE_MS = 10000;
 // Image generation is handled by the dedicated durable worker. Keep enough
 // time for slower providers, while leaving a buffer for storage and finalizing
@@ -4643,6 +4647,10 @@ const buildChatPromptCacheKey = (
   responseFormat,
 });
 
+const isAiReplyTimeout = (error: any) => error?.name === 'TimeoutError'
+  || /deadline|timeout/.test(String(error?.finishReason || ''))
+  || /timed?\s*out|timeout|gateway.*time-?out|(?:status|error)\s*504|مهلت .*به پایان|مهلت .*تمام شد/iu.test(String(error?.message || error || ''));
+
 const callChatCompletions = async (
   providerConfig: any,
   messages: Array<{ role: string; content: any }>,
@@ -4653,6 +4661,7 @@ const callChatCompletions = async (
     safetyIdentifier?: string;
     timeoutMs?: number;
     deadlineAt?: number;
+    signal?: AbortSignal;
     responseFormat?: Record<string, any> | null;
     tools?: any[];
     toolExecutor?: AgentToolExecutor;
@@ -4674,6 +4683,11 @@ const callChatCompletions = async (
   const tools = orderAiRequestTools(options?.tools);
   let promptCacheKey = await buildChatPromptCacheKey(providerConfig, messages, tools, options?.responseFormat);
 
+  const providerSignal = () => {
+    const timeout = AbortSignal.timeout(Math.max(1, Math.min(options?.timeoutMs ?? CHAT_COMPLETIONS_TIMEOUT_MS,
+      options?.deadlineAt ? options.deadlineAt - Date.now() : Infinity)));
+    return options?.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
+  };
   let lastErrorMessage = '';
   for (let attempt = 0; attempt < modelsToTry.length; attempt += 1) {
     const model = modelsToTry[attempt];
@@ -4716,6 +4730,7 @@ const callChatCompletions = async (
         if (recovered) return recovered;
         throw new Error('مهلت اجرای ایجنت تمام شد؛ بررسی کامل نشده است.');
       }
+      options?.signal?.throwIfAborted();
       currentMessages = await contextBudget.prepare(currentMessages);
       const requestBody: Record<string, any> = {
         model,
@@ -4753,7 +4768,7 @@ const callChatCompletions = async (
             'Content-Type': 'application/json',
           },
           body: JSON.stringify(requestBody),
-          signal: AbortSignal.timeout(Math.max(1, Math.min(options?.timeoutMs ?? CHAT_COMPLETIONS_TIMEOUT_MS, options?.deadlineAt ? options.deadlineAt - Date.now() : Infinity))),
+          signal: providerSignal(),
         }, { disableFallback: true });
         if (!result.response.ok && result.response.status === 400 && promptCacheKey) {
           const rawCacheError = await result.response.clone().text();
@@ -4768,13 +4783,15 @@ const callChatCompletions = async (
                 'Content-Type': 'application/json',
               },
               body: JSON.stringify(fallbackBody),
-              signal: AbortSignal.timeout(Math.max(1, Math.min(options?.timeoutMs ?? CHAT_COMPLETIONS_TIMEOUT_MS, options?.deadlineAt ? options.deadlineAt - Date.now() : Infinity))),
+              signal: providerSignal(),
             }, { disableFallback: true });
           }
         }
         response = result.response;
         baseUrl = result.baseUrl;
       } catch (error: any) {
+        options?.signal?.throwIfAborted();
+        if (options?.signal && error?.name === 'TimeoutError' && !accumulatedContent.trim()) throw error;
         lastErrorMessage = String(error?.message || 'اتصال به سرویس هوش مصنوعی برقرار نشد.');
         const recovered = recoverResult('stream_interrupted');
         if (recovered) return recovered;
@@ -4785,6 +4802,7 @@ const callChatCompletions = async (
       if (requestId) requestIds.push(requestId);
       finalBaseUrl = baseUrl;
       const raw = await response.text();
+      options?.signal?.throwIfAborted();
       const parsed = parseJsonSafe(raw);
       finalParsed = parsed;
       if (!response.ok) {
@@ -4934,6 +4952,7 @@ const callChatCompletionsStream = async (
     observeTools?: AgentToolBatchObserver;
     maxToolRounds?: number;
     deadlineAt?: number;
+    signal?: AbortSignal;
   } = {},
 ) => {
   if (providerConfig?.isActive === false) {
@@ -4980,6 +4999,7 @@ const callChatCompletionsStream = async (
   let currentOutputTokens = contextBudget.outputTokens;
   let currentReasoningEffort = providerConfig.reasoningEffort;
   const recoverTransport = async () => {
+    options.signal?.throwIfAborted();
     if (options.deadlineAt && options.deadlineAt - Date.now() < 3500) return deadlineResult();
     try {
       const result = await callChatCompletions(providerConfig,
@@ -4999,6 +5019,8 @@ const callChatCompletionsStream = async (
         usageMetadata: mergeChatUsageMetadata([...usageParts, result.usageMetadata], { ...providerConfig, model }) || result.usageMetadata,
       };
     } catch (error) {
+      options.signal?.throwIfAborted();
+      if (isAiReplyTimeout(error) && !content.trim()) throw error;
       const partial = getRecoverablePartialAiContent(error);
       if (partial) content = appendContinuationText(content, partial);
       return deadlineResult();
@@ -5010,6 +5032,7 @@ const callChatCompletionsStream = async (
       if (recovered) return recovered;
       throw new Error('مهلت امن پردازش پاسخ به پایان رسید؛ درخواست ثبت شد و می‌توانید دوباره تلاش کنید.');
     }
+    options.signal?.throwIfAborted();
     currentMessages = await contextBudget.prepare(currentMessages);
     const requestBody: Record<string, any> = {
       model,
@@ -5056,7 +5079,7 @@ const callChatCompletionsStream = async (
           Accept: 'text/event-stream',
         },
         body: JSON.stringify(body),
-        signal: streamController.signal,
+        signal: options.signal ? AbortSignal.any([options.signal, streamController.signal]) : streamController.signal,
       }, { disableFallback: true });
     };
     let result: { response: Response; baseUrl: string };
@@ -5066,7 +5089,7 @@ const callChatCompletionsStream = async (
       clearInactivityTimer();
       const recovered = await recoverTransport();
       if (recovered) return recovered;
-      throw buildIncompleteAiResponseError('stream_interrupted', content);
+      throw buildIncompleteAiResponseError(streamController.signal.aborted ? 'response_timeout' : 'stream_interrupted', content);
     }
     // Retry once if the selected gateway rejects an optional request field.
     if (!result.response.ok && result.response.status === 400) {
@@ -5086,7 +5109,7 @@ const callChatCompletionsStream = async (
           clearInactivityTimer();
           const recovered = await recoverTransport();
           if (recovered) return recovered;
-          throw buildIncompleteAiResponseError('stream_interrupted', content);
+          throw buildIncompleteAiResponseError(streamController.signal.aborted ? 'response_timeout' : 'stream_interrupted', content);
         }
       }
     }
@@ -5112,7 +5135,7 @@ const callChatCompletionsStream = async (
       if (/stream|event.source/i.test(String(message)) || [408, 502, 503, 504].includes(response.status)) {
         const recovered = await recoverTransport();
         if (recovered) return recovered;
-        throw buildIncompleteAiResponseError('stream_interrupted', content);
+        throw buildIncompleteAiResponseError(streamController.signal.aborted ? 'response_timeout' : 'stream_interrupted', content);
       }
       throw new Error(`خطای provider هوش مصنوعی: ${shortenProviderError(message)}`);
     }
@@ -5122,7 +5145,7 @@ const callChatCompletionsStream = async (
       await response.body?.cancel().catch(() => {});
       const recovered = await recoverTransport();
       if (recovered) return recovered;
-      throw buildIncompleteAiResponseError('stream_interrupted', content);
+      throw buildIncompleteAiResponseError(streamController.signal.aborted ? 'response_timeout' : 'stream_interrupted', content);
     }
 
     const reader = response.body.getReader();
@@ -5188,7 +5211,7 @@ const callChatCompletionsStream = async (
       if (finishReason !== 'stop' || pendingToolCalls.size) {
         const recovered = await recoverTransport();
         if (recovered) return recovered;
-        throw buildIncompleteAiResponseError('stream_interrupted', content);
+        throw buildIncompleteAiResponseError(streamController.signal.aborted ? 'response_timeout' : 'stream_interrupted', content);
       }
     } finally {
       clearInactivityTimer();
@@ -5232,7 +5255,7 @@ const callChatCompletionsStream = async (
     if (!doneMarker && (finishReason !== 'stop' || pendingToolCalls.size)) {
       const recovered = await recoverTransport();
       if (recovered) return recovered;
-      throw buildIncompleteAiResponseError('stream_interrupted', content);
+      throw buildIncompleteAiResponseError(streamController.signal.aborted ? 'response_timeout' : 'stream_interrupted', content);
     }
     if (!doneMarker) {
       const tail = continuationDelta('', true);
@@ -8525,7 +8548,8 @@ const patchChatThreadAfterAssistant = async (
 const handleChat = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any,
   activityTracker = createAiActivityTracker(), attachmentMimeTypes: string[] = [],
 ) => {
-  const deadlineAt = Date.now() + STREAM_REQUEST_SOFT_DEADLINE_MS;
+  const turn = getAssistantTurn(body);
+  const deadlineAt = turn?.deadlineAt ?? Date.now() + STREAM_REQUEST_SOFT_DEADLINE_MS;
   const prepared = await prepareChatRequest(supabaseUrl, serviceRoleKey, authContext, body, activityTracker.report);
   const {
     message,
@@ -8561,8 +8585,11 @@ const handleChat = async (supabaseUrl: string, serviceRoleKey: string, authConte
       toolExecutor: prepared.toolExecutor,
       observeTools: prepared.observeTools,
       deadlineAt,
+      signal: turn?.signal,
+      timeoutMs: turn ? CONVERSATION_PROVIDER_TIMEOUT_MS : undefined,
     }), activityTracker.report, attachmentMimeTypes.length ? { detail: describeAiAttachments(attachmentMimeTypes) } : undefined);
   } catch (error: any) {
+    turn?.signal.throwIfAborted();
     const partialContent = getRecoverablePartialAiContent(error);
     if (partialContent) {
       const finalPartialContent = buildPartialAiResponseContent(partialContent);
@@ -8627,8 +8654,9 @@ const handleChat = async (supabaseUrl: string, serviceRoleKey: string, authConte
         })),
       });
     }
-    const providerFailure = shortenProviderError(String(error?.message || error || 'chat_failed'));
-    const failedContent = providerFailure.startsWith('خطای provider')
+    const timedOut = isAiReplyTimeout(error);
+    const providerFailure = timedOut ? AI_REPLY_TIMEOUT_MESSAGE : shortenProviderError(String(error?.message || error || 'chat_failed'));
+    const failedContent = timedOut || providerFailure.startsWith('خطای provider')
       ? providerFailure
       : `پاسخ هوش مصنوعی ناموفق بود: ${providerFailure}`;
     const assistantMessage = await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
@@ -8828,12 +8856,15 @@ const ssePayload = (event: string, payload: Record<string, any>) =>
 const handleChatStream = (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
   const encoder = new TextEncoder();
   const requestStartedAt = Date.now();
-  const requestDeadlineAt = requestStartedAt + STREAM_REQUEST_SOFT_DEADLINE_MS;
+  const turn = getAssistantTurn(body);
+  const requestDeadlineAt = turn?.deadlineAt ?? requestStartedAt + STREAM_REQUEST_SOFT_DEADLINE_MS;
+  const transport = new AbortController();
+  const signal = turn ? AbortSignal.any([turn.signal, transport.signal]) : transport.signal;
   return new Response(new ReadableStream({
     start(controller) {
       let streamClosed = false;
       const send = (event: string, payload: Record<string, any>) => {
-        if (streamClosed) return;
+        if (streamClosed || signal.aborted) return;
         try {
           controller.enqueue(encoder.encode(ssePayload(event, payload)));
         } catch {
@@ -8849,6 +8880,7 @@ const handleChatStream = (supabaseUrl: string, serviceRoleKey: string, authConte
         try {
           prepared = await prepareChatRequest(supabaseUrl, serviceRoleKey, authContext, body,
             reportActivity, turn => send('accepted', turn));
+          signal.throwIfAborted();
           preparationMs = Date.now() - requestStartedAt;
           const respondingAgent = resolveAiAgentId(prepared.freeChatMode ? 'free_chat' : prepared.capability);
           send('meta', {
@@ -8875,11 +8907,13 @@ const handleChatStream = (supabaseUrl: string, serviceRoleKey: string, authConte
             toolExecutor: prepared.toolExecutor,
             observeTools: prepared.observeTools,
             deadlineAt: requestDeadlineAt,
+            signal,
             onDelta: (text) => {
               if (text) send('delta', { text });
             },
           }), reportActivity, { detail: 'در حال تحلیل درخواست با مدل' });
 
+          signal.throwIfAborted();
           const assistantMessage = await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
             thread_id: prepared.thread.id,
             role: 'assistant',
@@ -9017,6 +9051,7 @@ const handleChatStream = (supabaseUrl: string, serviceRoleKey: string, authConte
             })),
           });
         } catch (error: any) {
+          if (signal.aborted) return;
           console.warn('AI chat stream incomplete', {
             build: FUNCTION_BUILD,
             model: prepared?.providerConfig?.model || null,
@@ -9092,8 +9127,9 @@ const handleChatStream = (supabaseUrl: string, serviceRoleKey: string, authConte
             });
             return;
           }
-          const providerFailure = shortenProviderError(String(error?.message || error || 'chat_failed'));
-          const failedContent = providerFailure.startsWith('خطای provider')
+          const timedOut = isAiReplyTimeout(error);
+          const providerFailure = timedOut ? AI_REPLY_TIMEOUT_MESSAGE : shortenProviderError(String(error?.message || error || 'chat_failed'));
+          const failedContent = timedOut || providerFailure.startsWith('خطای provider')
             ? providerFailure
             : `پاسخ هوش مصنوعی ناموفق بود: ${providerFailure}`;
           let assistantMessage: any = null;
@@ -9142,14 +9178,13 @@ const handleChatStream = (supabaseUrl: string, serviceRoleKey: string, authConte
           clearInterval(heartbeat);
           if (!streamClosed) {
             streamClosed = true;
-            controller.close();
+            if (!transport.signal.aborted) controller.close();
           }
         }
       })();
     },
     cancel() {
-      // The browser may close the panel while provider work is being saved.
-      // The async task handles its own completion; no extra enqueue is safe.
+      transport.abort();
     },
   }), {
     status: 200,
@@ -9443,16 +9478,21 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
   let aiResult: any = null;
   let analysisError: any = null;
   let primaryAnalysisError = '';
+  const turn = getAssistantTurn(body);
+  const modelOptions = turn ? { ...turn, timeoutMs: CONVERSATION_PROVIDER_TIMEOUT_MS } : {};
   try {
     const observeTools = fileDataTools ? createAiToolActivityObserver(activityTracker.report, fileDataTools.access.modules.map(module => module.id), fileDataTools.getSkillOwner) : undefined;
     aiResult = await withAiAgentActivity('document_analysis', () => runNativeAgentInput({ hasNativeInput: fileParts.length > 0,
       primary: () => callChatCompletions(providerConfig, promptMessages, {
+        ...modelOptions,
         safetyIdentifier: `org_${authContext.orgId}_user_${authContext.userId}_cap_${capability}`,
         tools: fileDataTools?.tools, toolExecutor: fileDataTools?.execute, observeTools,
       }),
       fallback: async (error) => {
+        turn?.signal.throwIfAborted();
         const specialized = await resolveSpecializedProviderConfig(supabaseUrl, serviceRoleKey, authContext, 'document_analysis');
         const result = await callChatCompletions(specialized, promptMessages, {
+          ...modelOptions,
           safetyIdentifier: `org_${authContext.orgId}_user_${authContext.userId}_cap_document_analysis_fallback`,
           tools: fileDataTools?.tools, toolExecutor: fileDataTools?.execute, observeTools,
         });
@@ -9461,13 +9501,16 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
       },
     }), activityTracker.report, { detail: describeAiAttachments(attachmentMimeTypes) });
   } catch (error: any) {
+    turn?.signal.throwIfAborted();
     analysisError = error;
     primaryAnalysisError = String(error?.message || error || '').trim();
   }
+  turn?.signal.throwIfAborted();
   if (!aiResult) {
     const error = analysisError || new Error(primaryAnalysisError || 'file_chat_failed');
-    const providerFailure = shortenProviderError(String(error?.message || error || 'file_chat_failed'));
-    const failedContent = providerFailure.startsWith('خطای provider')
+    const timedOut = isAiReplyTimeout(error);
+    const providerFailure = timedOut ? AI_REPLY_TIMEOUT_MESSAGE : shortenProviderError(String(error?.message || error || 'file_chat_failed'));
+    const failedContent = timedOut || providerFailure.startsWith('خطای provider')
       ? providerFailure
       : `تحلیل فایل با هوش مصنوعی ناموفق بود: ${providerFailure}`;
     const assistantMessage = await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
@@ -9914,7 +9957,7 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
     : await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
     thread_id: thread.id,
     role: 'user',
-    content: prompt,
+    content: String(body?.userMessageText ?? prompt).trim() || prompt,
     provider: providerConfig.provider,
     model: providerConfig.model,
     metadata: {
@@ -10016,7 +10059,8 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
     },
   });
   mutationMessages.splice(1,0,{ role: 'system',content: 'رابطه‌ها را از تعریف schema و ستون‌های جدول کشف کن؛ با lookup_record_field یا فیلترهای داده گزینه واقعی را پیدا کن. اگر واقعاً وجود نداشت و ساخت آن لازم بود، prepare_relation_record را ابتدا در حالت describe و سپس prepare به‌کار ببر. پس از آماده‌شدن رکورد مرتبط، درخواست اصلی را ثبت‌شده معرفی نکن؛ کارت مرکزی ابتدا رکورد مرتبط را تأیید می‌کند.' });
-  const mutationCallOptions = { tools: [...relationIntake.tools,...recordTools.tools,...(intakeDataTools?.tools || []).filter((tool:any) => !fieldToolNames.has(tool.function.name) && /^(read_|describe_|get_organization_|count_|aggregate_)/.test(tool.function.name))],
+  const turn = getAssistantTurn(body);
+  const mutationCallOptions = { ...turn, timeoutMs: turn ? CONVERSATION_PROVIDER_TIMEOUT_MS : undefined, tools: [...relationIntake.tools,...recordTools.tools,...(intakeDataTools?.tools || []).filter((tool:any) => !fieldToolNames.has(tool.function.name) && /^(read_|describe_|get_organization_|count_|aggregate_)/.test(tool.function.name))],
     toolExecutor: (name:string,args:any) => name === 'prepare_relation_record' ? relationIntake.execute(args)
       : fieldToolNames.has(name) ? recordTools.execute(name,args) : intakeDataTools!.execute(name,args),
     observeTools: createAiToolActivityObserver(activityTracker.report, [targetModuleId, ...(intakeDataTools?.access.modules.map(module => module.id) || [])], intakeDataTools?.getSkillOwner),
@@ -10029,6 +10073,7 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
       runNativeAgentInput({ hasNativeInput: modelFiles.some((item: any) => !String(item.text || '').trim()),
       primary: () => callChatCompletions(providerConfig, mutationMessages, mutationCallOptions),
       fallback: async (error) => {
+        turn?.signal.throwIfAborted();
         const specialized = await resolveSpecializedProviderConfig(supabaseUrl, serviceRoleKey, authContext, 'document_analysis');
         const result = await callChatCompletions(specialized, mutationMessages, mutationCallOptions);
         result.analysisFallback = { used: true, primary_model: providerConfig.model, primary_error: shortenProviderError(String((error as any)?.message || error)) };
@@ -10037,6 +10082,7 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
     }), activityTracker.report, modelFiles.length ? {
       detail: describeAiAttachments(modelFiles.map((file: any) => String(file.mimeType || file.mime_type || '').toLowerCase())),
     } : undefined);
+    turn?.signal.throwIfAborted();
     if (aiResult.incomplete) {
       const parsedPartial = parseJsonSafe(aiResult.content);
       if (!parsedPartial || typeof parsedPartial !== 'object') {
@@ -10044,15 +10090,17 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
       }
     }
   } catch (error) {
+    turn?.signal.throwIfAborted();
+    const timeoutMessage = isAiReplyTimeout(error) ? AI_REPLY_TIMEOUT_MESSAGE : null;
     const failure = shortenProviderError(String((error as any)?.message || error));
     const failedMessage = await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
-      thread_id: thread.id, role: 'assistant', content: 'آماده‌سازی پیش‌نویس انجام نشد؛ چیزی ثبت نشده و پیوست‌ها در گفتگو محفوظ‌اند.',
+      thread_id: thread.id, role: 'assistant', content: timeoutMessage || 'آماده‌سازی پیش‌نویس انجام نشد؛ چیزی ثبت نشده و پیوست‌ها در گفتگو محفوظ‌اند.',
       provider: providerConfig.provider, model: providerConfig.model,
       metadata: { failed: true, agent_key: primaryAgent, selected_agents: runnableAgents.permittedAgents, action: mutationAction, error: failure,
         finish_reason: (error as any)?.finishReason || null, target_module_id: targetModuleId },
     });
-    return json(502, { success: false, threadId: thread.id, messageId: failedMessage?.id,
-      message: 'آماده‌سازی پیش‌نویس انجام نشد؛ پیوست‌ها محفوظ‌اند. دوباره تلاش کنید.' });
+    return json(timeoutMessage ? 504 : 502, { success: false, threadId: thread.id, messageId: failedMessage?.id,
+      message: timeoutMessage || 'آماده‌سازی پیش‌نویس انجام نشد؛ پیوست‌ها محفوظ‌اند. دوباره تلاش کنید.' });
   }
 
   if (relatedIntake) {
@@ -10737,6 +10785,7 @@ const handleSuggestAutoCapabilities = async (supabaseUrl: string, serviceRoleKey
         : routingUserPrompt },
     ];
     const routeResult = await callChatCompletions(providerConfig, routingMessages, {
+      ...getAssistantTurn(body),
       safetyIdentifier: `org_${authContext.orgId}_user_${authContext.userId}_cap_${baseCapability}_auto_router`,
       responseFormat: { type: 'json_object' },
     });
@@ -10804,6 +10853,7 @@ const handleSuggestAutoCapabilities = async (supabaseUrl: string, serviceRoleKey
       ledger,
     });
   } catch (error) {
+    getAssistantTurn(body)?.signal.throwIfAborted();
     console.warn('AI agent planner failed', error);
   }
 
@@ -11108,6 +11158,7 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
 
   const runStep = async (stepName: string, promise: Promise<Response>) => {
     const response = await promise;
+    getAssistantTurn(body)?.signal.throwIfAborted();
     const data = await parseAssistantJsonResponse(response);
     if (data?.threadId) workingThreadId = String(data.threadId);
     if (data?.provider) provider = data.provider;
@@ -12169,7 +12220,7 @@ const handleProcessOperationFromPrompt = async (supabaseUrl: string, serviceRole
   const userMessage = await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
     thread_id: thread.id,
     role: 'user',
-    content: filePrompt,
+    content: String(body?.userMessageText ?? filePrompt).trim() || filePrompt,
     provider: providerConfig.provider,
     model: providerConfig.model,
     metadata: {
@@ -12213,12 +12264,15 @@ const handleProcessOperationFromPrompt = async (supabaseUrl: string, serviceRole
       content: nativeParts.length ? [{ type: 'text', text: processPrompt }, ...nativeParts] : processPrompt,
     },
   ], {
+    ...getAssistantTurn(body),
+    timeoutMs: getAssistantTurn(body) ? CONVERSATION_PROVIDER_TIMEOUT_MS : undefined,
     tools: processTools?.tools, toolExecutor: processTools?.execute, maxToolRounds: 12,
     observeTools: processTools ? createAiToolActivityObserver(activityTracker.report, processTools.access.modules.map(module => module.id), processTools.getSkillOwner) : undefined,
     safetyIdentifier: `org_${authContext.orgId}_user_${authContext.userId}_cap_${capability}_process_operation`,
   }), activityTracker.report, files.length ? {
     detail: describeAiAttachments(files.map((file: any) => String(file.mimeType || file.mime_type || '').toLowerCase())),
   } : { detail: 'در حال آماده‌سازی پیشنهاد فرآیند' });
+  getAssistantTurn(body)?.signal.throwIfAborted();
   const parsed = extractJsonObjectFromText(aiResult.content) || {};
   const clarificationQuestions = normalizeAiClarificationQuestions(parsed?.questions);
   const needsClarification = parsed?.needs_clarification === true || parsed?.needsClarification === true || clarificationQuestions.length > 0;
@@ -18966,6 +19020,8 @@ Deno.serve(async (req: Request) => {
     return json(405, { success: false, message: 'روش ارسال درخواست معتبر نیست.' });
   }
 
+  const startedAt = Date.now();
+  let conversationRequest = false;
   try {
     const supabaseUrl = Deno.env.get('SUPABASE_URL');
     const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
@@ -18975,6 +19031,12 @@ Deno.serve(async (req: Request) => {
 
     const body = await readJsonBody(req);
     const action: AssistantAction = String(body?.action || 'chat') as AssistantAction;
+    if (body && typeof body === 'object' && ['chat', 'chat_stream', 'chat_with_file', 'analyze_file', 'upload_file', 'send_file',
+      'run_task_bundle', 'create_record_from_prompt', 'update_record_from_prompt', 'process_operation_from_prompt',
+      'suggest_auto_capabilities'].includes(action)) {
+      conversationRequest = true;
+      body[assistantTurn] = { signal: req.signal, deadlineAt: startedAt + STREAM_REQUEST_SOFT_DEADLINE_MS } satisfies AssistantTurn;
+    }
     const authHeader = req.headers.get('authorization') || '';
     const token = authHeader.replace(/^Bearer\s+/i, '').trim();
     const internalCaller = String(req.headers.get('x-kalam-internal') || '').trim();
@@ -19088,6 +19150,8 @@ Deno.serve(async (req: Request) => {
 
     return json(400, { success: false, message: 'اقدام درخواستی پشتیبانی نمی‌شود.' });
   } catch (error: any) {
+    if (req.signal.aborted) return json(499, { success: false, message: 'دریافت پاسخ متوقف شد.' });
+    if (conversationRequest && isAiReplyTimeout(error)) return json(504, { success: false, message: AI_REPLY_TIMEOUT_MESSAGE });
     const message = shortenProviderError(String(error?.message || 'خطای ناشناخته'));
     const status = Number(error?.status || 0) || (message === 'Unauthorized' ? 401 : 500);
     console.error('ai-assistant failed', error);
