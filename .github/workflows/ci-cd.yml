@@ -34,7 +34,7 @@ jobs:
         run: npx vitest run components/ai/AiChatSurfaceV2.test.tsx components/ai/AssistantPanel.operators.test.tsx supabase/functions/ai-assistant/data-tool-loop.test.ts --maxWorkers=1 --no-file-parallelism
       - uses: denoland/setup-deno@v2
         with:
-          deno-version: v2.1.4
+          deno-version: v2.9.6
       - name: Verify the assistant runtime dependencies
         run: deno check --node-modules-dir=none supabase/functions/ai-assistant/index.ts
       - name: Build
