@@ -1,6 +1,6 @@
 import React from 'react';
 import { App } from 'antd';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Login from './Login';
 
@@ -562,52 +562,44 @@ describe('Login OTP and password flows', () => {
     expect(mockNavigate).not.toHaveBeenCalled();
   }, 15000);
 
-  it('changes a forgotten password only after successful phone verification', async () => {
-    getDbState().profiles = [{ id: 'recovery-user', org_id: 'org-1', role_id: 'role-viewer', role: 'viewer',
-      full_name: 'کاربر بازیابی', mobile_1: '09121234567', is_active: true }];
-    rpcState.mockImplementation(async (fn: string) => fn === 'check_phone_login_candidate'
-      ? { data: { exists_in_profiles: true, exists_in_auth: true, has_phone_identity: true, is_active: true }, error: null }
-      : { data: null, error: null });
-    authState.signInWithOtp.mockResolvedValue({ error: null });
-    authState.verifyOtp.mockResolvedValue({ error: null });
-    authState.getUser.mockResolvedValue({ data: { user: { id: 'recovery-user', phone: '+989121234567' } }, error: null });
+  it('uses central SMS recovery and sets a new password only after the code is verified', async () => {
+    functionState.invoke.mockImplementation(async (_name, options) => {
+      const action = options.body.action;
+      return { data: { success: true, ...(action === 'start_organization_password_recovery' ? { challengeId: 'recovery-test' } : {}) }, error: null };
+    });
     renderLogin();
     fireEvent.click(screen.getByText('فراموشی رمز عبور'));
-    await screen.findByText('بازیابی رمز عبور با شماره موبایل');
-    setOtpPhone('09121234567'); clickRequestOtp();
-    await screen.findByText('تأیید شماره و تعیین رمز جدید');
+    const modal = within(await screen.findByRole('dialog'));
+    expect(screen.queryByText('دریافت لینک بازیابی از طریق ایمیل')).not.toBeInTheDocument();
+    fireEvent.change(modal.getByLabelText('شماره موبایل یا ایمیل'), { target: { value: '09121234567' } });
+    fireEvent.click(modal.getByText('دریافت کد تأیید'));
+    fireEvent.change(await modal.findByLabelText('رقم 1 کد تایید'), { target: { value: '123456' } });
+    expect(modal.queryByLabelText('رمز جدید')).not.toBeInTheDocument();
+    fireEvent.click(modal.getByText('تأیید کد'));
+    fireEvent.change(await modal.findByLabelText('رمز جدید'), { target: { value: 'new-password' } });
+    fireEvent.change(modal.getByLabelText('تکرار رمز جدید'), { target: { value: 'new-password' } });
+    fireEvent.click(modal.getByText('تعیین رمز جدید'));
+    await waitFor(() => expect(functionState.invoke).toHaveBeenCalledWith('user-admin', expect.objectContaining({
+      body: expect.objectContaining({ action: 'finish_organization_password_recovery', challengeId: 'recovery-test', password: 'new-password' }),
+    })));
     expect(authState.updateUser).not.toHaveBeenCalled();
-    fireEvent.change(screen.getByLabelText('رقم 1 کد تایید'), { target: { value: '123456' } });
-    fireEvent.click(screen.getByText('تأیید شماره و تعیین رمز جدید'));
-    await screen.findByText('رمز جدید حساب شخصی');
-    const fields = document.querySelectorAll('input[type="password"]');
-    fireEvent.change(fields[0], { target: { value: 'new-password' } });
-    fireEvent.change(fields[1], { target: { value: 'different-password' } });
-    fireEvent.click(screen.getByText('ثبت رمز جدید'));
-    expect(authState.updateUser).not.toHaveBeenCalled();
-    fireEvent.change(fields[1], { target: { value: 'new-password' } });
-    fireEvent.click(screen.getByText('ثبت رمز جدید'));
-    await waitFor(() => expect(authState.updateUser).toHaveBeenCalledWith({ password: 'new-password' }));
-    await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith('/', { replace: true }));
   });
 
-  it('does not offer password entry when phone verification fails', async () => {
-    rpcState.mockImplementation(async (fn: string) => fn === 'check_phone_login_candidate'
-      ? { data: { exists_in_profiles: true, exists_in_auth: true, has_phone_identity: true, is_active: true }, error: null }
-      : { data: null, error: null });
-    authState.signInWithOtp.mockResolvedValue({ error: null });
-    authState.verifyOtp.mockResolvedValue({ error: { message: 'invalid otp' } });
+  it('keeps password entry hidden when the central verification code is rejected', async () => {
+    functionState.invoke.mockImplementation(async (_name, options) =>
+      options.body.action === 'start_organization_password_recovery'
+        ? { data: { success: true, challengeId: 'recovery-test' }, error: null }
+        : { data: { success: false, message: 'کد تأیید نادرست است.' }, error: null });
     renderLogin();
     fireEvent.click(screen.getByText('فراموشی رمز عبور'));
-    await screen.findByText('بازیابی رمز عبور با شماره موبایل');
-    setOtpPhone('09121234567'); clickRequestOtp();
-    await screen.findByText('تأیید شماره و تعیین رمز جدید');
-    fireEvent.change(screen.getByLabelText('رقم 1 کد تایید'), { target: { value: '000000' } });
-    fireEvent.click(screen.getByText('تأیید شماره و تعیین رمز جدید'));
-    await waitFor(() => expect(authState.verifyOtp).toHaveBeenCalled());
-    expect(screen.queryByText('ثبت رمز جدید')).not.toBeInTheDocument();
+    const modal = within(await screen.findByRole('dialog'));
+    fireEvent.change(modal.getByLabelText('شماره موبایل یا ایمیل'), { target: { value: 'member@example.test' } });
+    fireEvent.click(modal.getByText('دریافت کد تأیید'));
+    fireEvent.change(await modal.findByLabelText('رقم 1 کد تایید'), { target: { value: '000000' } });
+    fireEvent.click(modal.getByText('تأیید کد'));
+    await screen.findByText('کد تأیید نادرست است.');
+    expect(modal.queryByLabelText('رمز جدید')).not.toBeInTheDocument();
     expect(authState.updateUser).not.toHaveBeenCalled();
-    expect(mockNavigate).not.toHaveBeenCalled();
   });
 
   it('accepts Persian mobile digits for password sign-in and resolves verified memberships', async () => {

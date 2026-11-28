@@ -584,6 +584,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     });
   },[active,threadId,submitting]);
   const [deletingThread, setDeletingThread] = useState(false);
+  const [deletingMessageId, setDeletingMessageId] = useState<string | null>(null);
+  const [canDeleteThreadMessages, setCanDeleteThreadMessages] = useState(!initialThreadId);
   const deletingThreadRef = useRef(false);
   const [aiKnowledgeConfigured, setAiKnowledgeConfigured] = useState(true);
   const [checkingAiKnowledge, setCheckingAiKnowledge] = useState(false);
@@ -1810,6 +1812,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       setThreadContext(getThreadContext(data?.thread));
       if (data?.thread) onThreadUpserted?.(data.thread);
       setThreadIsShared(data?.thread?.is_shared === true);
+      setCanDeleteThreadMessages(data?.canDeleteMessages === true);
       setSharedIdentityTokens([
         ...(Array.isArray(data?.thread?.shared_user_ids) ? data.thread.shared_user_ids.map((id: any) => `user:${String(id || '').trim()}`) : []),
         ...(Array.isArray(data?.thread?.shared_role_ids) ? data.thread.shared_role_ids.map((id: any) => `role:${String(id || '').trim()}`) : []),
@@ -1923,6 +1926,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     setThreadTitle(initialTitle);
     setDraftThreadTitle(initialTitle);
     setThreadIsShared(initialThreadIsShared);
+    setCanDeleteThreadMessages(!normalizedInitialThreadId);
     setSharedIdentityTokens([]);
     setEditingThreadTitle(false);
     setPendingAiAction(null);
@@ -3295,6 +3299,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     setThreadListOpen(false);
     setQueuedFollowUp(null);
     setFollowUpToSend(null);
+    setCanDeleteThreadMessages(true);
     if (onNewConversation) {onNewConversation();return;}
     if (conversationContext.mode==='record') restoredRecordThreadScopeRef.current=`${conversationContext.moduleId}:${conversationContext.recordId}`;
     if (draftScope) rememberAiDraftConversation(draftScope, draftContextKey, null);
@@ -3329,6 +3334,23 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   // Typing in the composer must not rebuild every rich message card.  Several
   // cards contain media previews and markdown, so keeping this callback stable
   // makes the compose box responsive even in long conversations.
+  const deleteConversationMessage = useCallback(async (item: ChatMessage) => {
+    if (!threadId || deletingMessageId || submitting) return;
+    setDeletingMessageId(item.id);
+    try {
+      const result = await callAssistant({ action: 'delete_conversation_message', threadId, messageId: item.id });
+      setMessages(current => current.filter(entry => entry.id !== item.id));
+      const rejected = new Set<string>(result?.rejectedActionIds || []);
+      setPendingAiAction(current => current && (rejected.has(String(current.id)) ||
+        (current.actionType === 'agent_task_batch' && current.actions.some((action: any) => rejected.has(String(action.id))))) ? null : current);
+      message.success('پیام حذف شد.');
+    } catch (error) {
+      message.error(toFaErrorMessage(error, 'حذف پیام انجام نشد.'));
+    } finally {
+      setDeletingMessageId(null);
+    }
+  }, [callAssistant, deletingMessageId, message, submitting, threadId]);
+
   const renderMessage = useCallback((item: ChatMessage, index: number) => {
     const isUser = item.role === 'user';
     const messageAuthor = item.metadata?.author && typeof item.metadata.author === 'object' ? item.metadata.author : null;
@@ -3434,7 +3456,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           <div
             className={`ai-chat-message text-right${isUser ? ' is-user' : ' is-assistant w-full'}`}
           >
-            {isUser ? messageText : waitingForResponse ? (
+            {isUser ? (messageText ? <div className="whitespace-pre-wrap break-words">{messageText}</div> : null) : waitingForResponse ? (
               <AiActivityStatus agentId={respondingAgent} activities={activeAgents}
                 pendingDetail={item.metadata?.kind === 'voice_input' ? messageText : undefined}
                 onStop={isStreaming ? stopActiveTurn : undefined} />
@@ -3710,6 +3732,16 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
                   }] : []),
                 ]}
               />
+              {canDeleteThreadMessages && threadId && !isStreaming && !waitingForResponse &&
+                /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(item.id) ? (
+                <Popconfirm title="پیام حذف شود؟" description="دستیار برای ادامهٔ گفتگو این پیام را نمی‌خواند."
+                  okText="حذف پیام" cancelText="انصراف" okButtonProps={{ danger: true }}
+                  onConfirm={() => deleteConversationMessage(item)}>
+                  <Button type="text" size="small" danger icon={<DeleteOutlined />} aria-label="حذف این پیام"
+                    className="min-h-6 min-w-6 touch-manipulation [@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:min-w-11"
+                    disabled={submitting || Boolean(deletingMessageId)} loading={deletingMessageId === item.id} />
+                </Popconfirm>
+              ) : null}
             </div>
           </div>
         </div>
@@ -3717,6 +3749,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     );
   }, [
     animatedReceiptId,
+    canDeleteThreadMessages,
     contextWithSelection.mode,
     contextWithSelection.moduleId,
     contextWithSelection.recordId,
@@ -3724,6 +3757,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     createActivityFromMessage,
     currentUserView.avatarUrl,
     currentUserView.name,
+    deleteConversationMessage,
+    deletingMessageId,
     forwardMessage,
     handleEditImage,
     messageFeedback,
@@ -3734,6 +3769,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     recheckingId,
     stopActiveTurn,
     submitChat,
+    submitting,
+    threadId,
   ]);
 
   const renderedMessages = useMemo(() => messages.map(renderMessage), [messages, renderMessage]);
@@ -4192,6 +4229,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           </div>
         ) : null}
         <AiMessageComposer value={input} onChange={setInput}
+          disabled={Boolean(deletingMessageId)}
           onSubmit={() => {
             if (submitting) {
               const text = input.trim();

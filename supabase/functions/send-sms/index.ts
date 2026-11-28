@@ -1486,6 +1486,9 @@ Deno.serve(async (req) => {
     const hasHookSecret = !!hookSecret && requestHookSecret === hookSecret;
     const hasBearerToken = authHeader.startsWith('Bearer ');
     const token = hasBearerToken ? authHeader.replace(/^Bearer\s+/i, '').trim() : '';
+    const isOrganizationAuthOtp =
+      token === serviceRoleKey &&
+      req.headers.get('x-kalam-internal') === 'organization-password-auth' && !!hookOtp;
     const isInternalServiceRequest =
       token === serviceRoleKey &&
       ['workflow-interval-runner', 'campaign-runtime'].includes(
@@ -1500,7 +1503,7 @@ Deno.serve(async (req) => {
       !!body?.text ||
       !!body?.template_data ||
       !!hookOtp;
-    const isAuthHookRequest = (hasHookSecret && isHookSmsPayload) || isSupabaseAuthHookPayload;
+    const isAuthHookRequest = isOrganizationAuthOtp || (hasHookSecret && isHookSmsPayload) || isSupabaseAuthHookPayload;
     const payloadShape = {
       topKeys: Object.keys(body || {}).slice(0, 12),
       hasUser: !!body?.user,

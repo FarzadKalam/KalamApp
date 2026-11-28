@@ -300,6 +300,36 @@ describe('AiChatSurfaceV2', () => {
     expect(screen.getByRole('textbox', { name: 'پیام به دستیار هوشمند' })).toHaveValue('گزارش ماهانه');
   }, 15000);
 
+  it('preserves user line breaks and offers deletion below both message roles', async () => {
+    const userMessageId = '10000000-0000-4000-8000-000000000001';
+    const assistantMessageId = '10000000-0000-4000-8000-000000000002';
+    const text = 'خط اول\n\nخط دوم';
+    const base = invokeMock.getMockImplementation();
+    invokeMock.mockImplementation(async (name, options) => {
+      if (options.body.action === 'get_thread') return {
+        data: { success: true, threadId: 'thread-1', thread: { id: 'thread-1' }, canDeleteMessages: true, messages: [
+          { id: userMessageId, role: 'user', content: text }, { id: assistantMessageId, role: 'assistant', content: 'پاسخ گفتگو' },
+        ] },
+        error: null,
+      };
+      if (options.body.action === 'delete_conversation_message') return { data: { success: true }, error: null };
+      return base?.(name, options);
+    });
+    renderSurface(['/ai?thread=thread-1']);
+    const sent = await screen.findByText(/خط اول/);
+    expect(sent.textContent).toBe(text);
+    expect(sent).toHaveClass('whitespace-pre-wrap');
+    const buttons = screen.getAllByRole('button', { name: 'حذف این پیام' });
+    expect(buttons).toHaveLength(2);
+    fireEvent.click(buttons[0]);
+    fireEvent.click(await screen.findByRole('button', { name: 'حذف پیام', exact: true }));
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith('ai-assistant', expect.objectContaining({
+      body: expect.objectContaining({ action: 'delete_conversation_message', threadId: 'thread-1', messageId: userMessageId }),
+    })));
+    expect(screen.queryByText(/خط اول/)).not.toBeInTheDocument();
+    expect(screen.getByText('پاسخ گفتگو')).toBeInTheDocument();
+  }, 45000);
+
   it('does not auto-submit when a dashboard file is only queued for the new conversation', async () => {
     renderSurface([{
         pathname: '/ai',

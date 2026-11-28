@@ -14,7 +14,7 @@ permissions:
   contents: read
 
 jobs:
-  isolated_assistant_build:
+  isolated_release_build:
     if: ${{ !inputs.deploy && inputs.frontend_only }}
     runs-on: ubuntu-latest
     steps:
@@ -27,16 +27,16 @@ jobs:
         run: npm ci
       - name: Typecheck
         run: npx tsc --noEmit
-      - name: Assistant regression checks
+      - name: Assistant and organization authentication regression checks
         env:
           VITE_SUPABASE_URL: https://isolated-test.invalid
           VITE_SUPABASE_ANON_KEY: isolated-test-only
-        run: npx vitest run components/ai/AiChatSurfaceV2.test.tsx components/ai/AssistantPanel.operators.test.tsx supabase/functions/ai-assistant/data-tool-loop.test.ts --maxWorkers=1 --no-file-parallelism
+        run: npx vitest run components/ai/AiChatSurfaceV2.test.tsx components/ai/AssistantPanel.operators.test.tsx supabase/functions/ai-assistant/data-tool-loop.test.ts supabase/functions/ai-assistant/thread-memory.test.ts supabase/functions/_shared/ai-conversation-routing.test.ts supabase/functions/_shared/organization-password-auth.test.ts supabase/functions/user-admin/membership.test.ts pages/Login.test.tsx --maxWorkers=1 --no-file-parallelism
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.9.6
-      - name: Verify the assistant runtime dependencies
-        run: deno check --node-modules-dir=none supabase/functions/ai-assistant/index.ts
+      - name: Verify Edge runtime dependencies
+        run: deno check --node-modules-dir=none supabase/functions/ai-assistant/index.ts supabase/functions/user-admin/index.ts supabase/functions/send-sms/index.ts
       - name: Build
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}

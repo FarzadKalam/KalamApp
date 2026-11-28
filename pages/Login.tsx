@@ -23,6 +23,8 @@ import OtpCodeInput from '../components/common/OtpCodeInput';
 import { formatIranMobileForInput } from '../utils/phoneNumber';
 import { handoffSessionToTenant } from '../utils/tenantSessionHandoff';
 import { selectOrganizationContext } from '../utils/organizationContext';
+import OrganizationPasswordForm, { OrganizationPasswordRecovery } from '../components/auth/OrganizationPasswordForm';
+import { isSelfHostedDeployment } from '../utils/runtimeConfig';
 
 const LOGIN_MODE_STORAGE_KEY = 'kalam_login_mode';
 const OTP_PHONE_STORAGE_KEY = 'kalam_login_otp_phone';
@@ -62,7 +64,7 @@ const Login = () => {
   const [newPassword, setNewPassword] = useState('');
   const [confirmNewPassword, setConfirmNewPassword] = useState('');
   const [recoveryMode, setRecoveryMode] = useState(false);
-  const [phoneRecovery, setPhoneRecovery] = useState(false);
+  const [passwordRecoveryOpen, setPasswordRecoveryOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [otpLoading, setOtpLoading] = useState(false);
   const [brandTitle, setBrandTitle] = useState(() => readRuntimeBrandSnapshot().title);
@@ -418,9 +420,6 @@ const Login = () => {
     setOtpLoading(true);
     try {
       const candidate = await lookupPhoneLoginCandidate(normalizedPhone);
-      if (phoneRecovery && candidate?.exists_in_profiles !== true) {
-        throw new Error('برای بازیابی رمز، شمارهٔ حساب موجود خود را وارد کنید.');
-      }
       const invite = await lookupPhoneSignupInvite(normalizedPhone);
       const profileNeedsPhoneIdentity =
         candidate?.exists_in_profiles === true
@@ -469,13 +468,6 @@ const Login = () => {
       await ensureInvitedOrExistingProfile(otpRequestedFor);
       await ensureActiveSessionUser();
       profileReady = true;
-      if (phoneRecovery) {
-        clearOtpSessionState();
-        setOtpRequestedFor(null);
-        setOtpCode('');
-        setRecoveryMode(true);
-        return;
-      }
       clearOtpSessionState();
       setOtpRequestedFor(null);
       setOtpCode('');
@@ -504,24 +496,6 @@ const Login = () => {
     }
   };
 
-  const handleResetPassword = async () => {
-    if (loading) return;
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizeEmail(email))) {
-      message.error('برای دریافت لینک بازیابی، ایمیل حساب خود را وارد کنید.');
-      return;
-    }
-
-    setLoading(true);
-    try {
-      const { error } = await supabase.auth.resetPasswordForEmail(normalizeEmail(email), {
-        redirectTo: `${window.location.origin}/login`,
-      });
-      if (error) throw error;
-      message.success('اگر این ایمیل حساب داشته باشد، لینک بازیابی برای آن ارسال می‌شود. اگر نامه را ندیدید، پوشهٔ Spam / Junk / هرزنامه را هم بررسی کنید.', 8);
-    } catch (error) { message.error(toFaErrorMessage(error, 'ارسال ایمیل ناموفق بود.')); }
-    finally { setLoading(false); }
-  };
-
   const handleSetNewPassword = async () => {
     if (loading) return;
     if (!newPassword || newPassword.length < 6) {
@@ -540,7 +514,6 @@ const Login = () => {
 
       message.success('رمز عبور با موفقیت تغییر کرد');
       setRecoveryMode(false);
-      setPhoneRecovery(false);
       setNewPassword('');
       setConfirmNewPassword('');
       window.history.replaceState({}, document.title, '/login');
@@ -646,7 +619,6 @@ const Login = () => {
                 type="link"
                 onClick={() => {
                   setRecoveryMode(false);
-                  setPhoneRecovery(false);
                   setNewPassword('');
                   setConfirmNewPassword('');
                   void signOutLocalSession();
@@ -660,12 +632,19 @@ const Login = () => {
           ) : (
             <Tabs
               activeKey={loginMode}
-              onChange={(key) => { setLoginMode(key as 'password' | 'otp'); setPhoneRecovery(false); }}
+              onChange={(key) => setLoginMode(key as 'password' | 'otp')}
               items={[
                 {
                   key: 'password',
                   label: 'رمز عبور',
-                  children: (
+                  children: isSaasAppHost() || (isTenantHost() && !isSelfHostedDeployment()) ? (
+                    <OrganizationPasswordForm shared={isSaasAppHost()} onLogin={async (session, organization) => {
+                      const { error } = await supabase.auth.setSession(session);
+                      if (error) throw error;
+                      await ensureActiveSessionUser();
+                      await activateOrganizationAndRedirect({ ...organization, role_name: organization.role_name || '' });
+                    }} />
+                  ) : (
                     <div className="flex flex-col gap-4">
                       <div>
                         <label className="block text-sm font-medium mb-1">شماره موبایل یا ایمیل</label>
@@ -678,12 +657,10 @@ const Login = () => {
                       <Button type="primary" onClick={handleLogin} loading={loading} className="w-full bg-leather-600 h-10 text-lg">
                         ورود
                       </Button>
-                      <Button type="link" onClick={() => { setPhoneRecovery(true); setLoginMode('otp'); setOtpCode(''); setOtpRequestedFor(null); }} className="text-xs">
+                      <Button type="link" onClick={() => setPasswordRecoveryOpen(true)} className="text-xs">
                         فراموشی رمز عبور
                       </Button>
-                      <Button type="link" loading={loading} onClick={handleResetPassword} className="text-xs">
-                        دریافت لینک بازیابی از طریق ایمیل
-                      </Button>
+                      {passwordRecoveryOpen ? <OrganizationPasswordRecovery open onClose={() => setPasswordRecoveryOpen(false)} contact={email} /> : null}
                     </div>
                   ),
                 },
@@ -692,8 +669,6 @@ const Login = () => {
                   label: 'کد یکبارمصرف',
                   children: (
                     <div className="flex flex-col gap-4">
-                      {phoneRecovery && <Alert type="info" showIcon message="بازیابی رمز عبور با شماره موبایل"
-                        description="شمارهٔ حساب خود را تأیید کنید؛ سپس رمز جدیدی برای ورود به همهٔ سازمان‌ها تعیین کنید." />}
                       <Alert
                         type="info"
                         showIcon
@@ -739,7 +714,7 @@ const Login = () => {
                             onClick={handleVerifyOtp}
                             className="w-full bg-leather-600 h-10 text-lg"
                           >
-                            {phoneRecovery ? 'تأیید شماره و تعیین رمز جدید' : 'ورود با کد'}
+                            ورود با کد
                           </Button>
                           <Button
                             type="link"

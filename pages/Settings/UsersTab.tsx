@@ -25,7 +25,7 @@ import { supabase } from '../../supabaseClient';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import { loadProfilesWithCompat } from '../../utils/profileDirectory';
 import { getOtpErrorMessage, normalizeOtpToken } from '../../utils/otpAuth';
-import { assertPhoneAvailableForOrg, getPhoneOtpStatusMeta, getPhoneOwnershipErrorMessage, lookupPhoneLoginCandidate, lookupPhoneSignupInvite } from '../../utils/phoneAuth';
+import { getPhoneOtpStatusMeta, getPhoneOwnershipErrorMessage, lookupPhoneLoginCandidate } from '../../utils/phoneAuth';
 import { formatIranMobileForInput, normalizeIranMobile } from '../../utils/phoneNumber';
 import { clearSessionBootstrapCache, fetchSessionBootstrap } from '../../utils/sessionCache';
 import { clearReferenceDataCache } from '../../utils/referenceData';
@@ -60,6 +60,7 @@ type UserRow = {
   created_at?: string | null;
   org_roles?: any;
   can_edit_identity?: boolean;
+  independent_account?: boolean;
   _rowType: 'profile' | 'invite';
   _inviteId?: string | null;
   _isPending?: boolean;
@@ -227,7 +228,7 @@ const UsersTab: React.FC = () => {
     if (!currentOrgId) return;
     setLoading(true);
     try {
-      const [{ data: usersData, error: usersError }, { data: rolesData, error: rolesError }, { data: invitesData, error: invitesError }] =
+      const [{ data: usersData, error: usersError }, { data: rolesData, error: rolesError }, { data: invitesData, error: invitesError }, { data: independentContacts, error: contactsError }] =
         await Promise.all([
           loadProfilesWithCompat(supabase, {
             orgId: currentOrgId,
@@ -241,16 +242,24 @@ const UsersTab: React.FC = () => {
             .eq('org_id', currentOrgId)
             .is('consumed_at', null)
             .order('created_at', { ascending: false }),
+          supabase.rpc('list_organization_password_contacts'),
         ]);
 
       if (usersError) throw usersError;
       if (rolesError) throw rolesError;
       if (invitesError) throw invitesError;
 
-      const profileRows: UserRow[] = (usersData || []).map((row: any) => ({
-        ...row,
-        _rowType: 'profile',
-      }));
+      if (contactsError && contactsError.code !== 'PGRST202') throw contactsError;
+      const contacts = new Map<string, { phone_e164: string; recovery_email?: string | null }>(
+        (independentContacts || []).map((item: any) => [item.user_id, item]),
+      );
+      const profileRows: UserRow[] = (usersData || []).map((row: any) => {
+        const contact = contacts.get(row.id);
+        return { ...row, _rowType: 'profile', ...(contact ? {
+          independent_account: true, can_edit_identity: false,
+          mobile_1: toInviteDisplayPhone(contact.phone_e164), email: contact.recovery_email,
+        } : {}) };
+      });
 
       const inviteRows: UserRow[] = (invitesData || []).map((row: any) => ({
         id: `invite:${row.id}`,
@@ -558,16 +567,26 @@ const UsersTab: React.FC = () => {
   const saveExternalVoipAccount = async (values: any, profileId: string) => {
     if(!resolveVoipPolicy(orgVoipConfig||{},orgVoipConfig?.provider).canUseBrowser)return;
     if(!values.voip_enabled&&!userEndpoint?.id)return;
-    const {data,error}=await supabase.functions.invoke('voip-session',{body:{action:'upsert_endpoint',endpoint:{
-      id:userEndpoint?.id,assignee_profile_id:profileId,extension:String(values.voip_extension||userEndpoint?.extension||'').trim(),
-      display_name:String(values.full_name||values.voip_extension||'').trim(),sip_secret:String(values.voip_sip_password||'').trim()||undefined,
+    const extension=String(values.voip_extension||userEndpoint?.extension||'').trim();
+    const secret=String(values.voip_sip_password||'').trim();
+    if(!extension||(!userEndpoint?.id&&!secret)){
+      message.warning('عضویت ذخیره شد. برای فعال‌سازی تلفن، نام کاربری و رمز حساب سرویس‌دهنده را تکمیل کنید.');
+      return;
+    }
+    try {
+      const {data,error}=await supabase.functions.invoke('voip-session',{body:{action:'upsert_endpoint',endpoint:{
+      id:userEndpoint?.id,assignee_profile_id:profileId,extension,
+      display_name:String(values.full_name||values.voip_extension||'').trim(),sip_secret:secret||undefined,
       is_active:values.voip_enabled===true,metadata:{ai_dedicated:values.voip_ai_dedicated===true,dial_extension:String(values.voip_dial_extension||'').trim(),wss_url:String(values.voip_wss_url||'').trim(),
         sip_domain:String(values.voip_sip_domain||'').trim(),auth_username:String(values.voip_auth_username||'').trim(),
         server_url:String(values.voip_server_url||'').trim(),provider:orgVoipConfig?.provider,
         connection_strategy:values.voip_connection_strategy||'auto',sip_transport:values.voip_sip_transport||'udp',sip_port:values.voip_sip_port||null},
     }}});
-    if(error||!data?.success)throw new Error(`عضویت کاربر ذخیره شد، اما تنظیم حساب تلفن انجام نشد: ${data?.message||error?.message||'دوباره تلاش کنید.'}`);
-    await voipQueryClient.invalidateQueries({queryKey:['voip-connection-policy',currentOrgId]});
+      if(error||!data?.success)throw error || new Error(data?.message);
+      await voipQueryClient.invalidateQueries({queryKey:['voip-connection-policy',currentOrgId]});
+    } catch (error) {
+      message.warning(`عضویت کاربر ذخیره شد. ${toFaErrorMessage(error, 'ذخیرهٔ تنظیمات تلفن انجام نشد.')}`);
+    }
   };
 
   const handleAddOrEditUser = async (values: any) => {
@@ -587,7 +606,7 @@ const UsersTab: React.FC = () => {
         message.error('رمز عبور باید حداقل ۶ کاراکتر باشد.');
         return;
       }
-      if (values.password !== values.password_confirm) {
+      if ((values.password || '') !== (values.password_confirm || '')) {
         message.error('رمز عبور و تکرار آن یکسان نیست.');
         return;
       }
@@ -607,6 +626,7 @@ const UsersTab: React.FC = () => {
             avatarUrl: avatarUrl ?? editingUser.avatar_url ?? null,
             password: values.password || undefined,
           } : {}),
+          ...(editingUser.independent_account ? { password: values.password || undefined } : {}),
           roleId: values.role_id || null,
           role: values.role || 'viewer',
           isActive: values.is_active !== false,
@@ -631,10 +651,6 @@ const UsersTab: React.FC = () => {
         resetDrawerState();
       } else {
         if (!normalizedPhone) throw new Error('شماره موبایل معتبر نیست.');
-        const candidate = await lookupPhoneLoginCandidate(normalizedPhone);
-        const invite = await lookupPhoneSignupInvite(normalizedPhone);
-        assertPhoneAvailableForOrg(candidate, invite, seedInvite?.org_id || currentOrgId, { allowSameOrgPendingInvite: true });
-
         const created = await invokeUserAdmin({
           action: 'create_user',
           orgId: seedInvite?.org_id || currentOrgId,
@@ -648,7 +664,9 @@ const UsersTab: React.FC = () => {
           password: values.password,
         });
 
-        message.success('کاربر با موفقیت ایجاد شد. حالا می‌توانید شماره او را همین‌جا تایید کنید.');
+        message.success(created?.independentAccount
+          ? 'حساب مستقل با رمز همین سازمان ایجاد شد.'
+          : 'کاربر ایجاد شد. حالا می‌توانید شمارهٔ او را همین‌جا تأیید کنید.');
         clearReferenceDataCache();
         clearIdentityDirectoryCache(currentOrgId);
         await fetchData();
@@ -657,14 +675,15 @@ const UsersTab: React.FC = () => {
           const { error: settingsError } = await supabase.rpc('manage_organization_member', {
             p_user_id: createdId, p_patch: { settings: buildVoipProfilePatch(values) },
           });
-          if (settingsError) throw settingsError;
-
-          await saveExternalVoipAccount(values,createdId);
+          if (settingsError) message.warning('عضویت ذخیره شد. اطلاعات تلفن را می‌توانید از بخش ویرایش تکمیل کنید.');
+          else await saveExternalVoipAccount(values,createdId);
           const { data: createdMembers, error: createdMemberError } = await supabase.rpc('list_organization_members', {
             p_org_id: currentOrgId, p_user_id: createdId, p_limit: 1,
           });
           if (createdMemberError) throw createdMemberError;
-          const createdProfile = createdMembers?.[0];
+          const createdProfile = createdMembers?.[0] && (created?.independentAccount
+            ? { ...createdMembers[0], ...created.profile, independent_account: true, can_edit_identity: false }
+            : createdMembers[0]);
           if (createdProfile) {
             setEditingUser({
               ...createdProfile,
@@ -958,7 +977,7 @@ const UsersTab: React.FC = () => {
           </Form.Item>
           {!isEditingRealUser ? (
             <>
-              <Form.Item label="رمز عبور" name="password" rules={[{ required: true, min: 6, message: 'رمز عبور باید حداقل ۶ کاراکتر باشد' }]}>
+              <Form.Item label="رمز ورود به این سازمان" name="password" rules={[{ required: true, min: 6, message: 'رمز عبور باید حداقل ۶ کاراکتر باشد' }]}>
                 <Input.Password placeholder="حداقل ۶ کاراکتر" />
               </Form.Item>
               <Form.Item
@@ -966,10 +985,9 @@ const UsersTab: React.FC = () => {
                 name="password_confirm"
                 dependencies={['password']}
                 rules={[
-                  { required: true, message: 'تکرار رمز عبور الزامی است' },
                   ({ getFieldValue }) => ({
                     validator(_, value) {
-                      if (!value || getFieldValue('password') === value) {
+                      if ((getFieldValue('password') || '') === (value || '')) {
                         return Promise.resolve();
                       }
                       return Promise.reject(new Error('با رمز عبور یکسان نیست'));
@@ -982,7 +1000,7 @@ const UsersTab: React.FC = () => {
             </>
           ) : (
             <Form.Item label="رمز عبور جدید" name="password">
-              <Input.Password disabled={!canEditIdentity} placeholder="در صورت نیاز تغییر دهید" />
+              <Input.Password disabled={!canEditIdentity && !editingUser?.independent_account} placeholder="در صورت نیاز تغییر دهید" />
             </Form.Item>
           )}
           <Form.Item label={`وضعیت عضویت در ${currentOrgName}`} name="is_active" valuePropName="checked" initialValue
@@ -1004,7 +1022,7 @@ const UsersTab: React.FC = () => {
               ) : null}
             </div>
 
-            <VoipUserFields settings={orgVoipConfig||{}} form={form} hasAccount={!!userEndpoint?.id} onScan={()=>setQrScannerOpen(true)} />
+            <VoipUserFields settings={orgVoipConfig||{}} form={form} hasAccount={!!userEndpoint?.id} optionalAccount onScan={()=>setQrScannerOpen(true)} />
           </div>
 
           <div className="mt-6 rounded-2xl border border-gray-200 dark:border-gray-800 p-4 space-y-3">

@@ -4,6 +4,7 @@ import { beforeAll, beforeEach, afterAll, describe, expect, it, vi } from 'vites
 let handler: (request: Request) => Promise<Response>;
 let scope: Record<string, unknown>;
 let shared: boolean;
+let loginCandidates: Array<{ org_id: string; user_id: string }>;
 const calls: { url: URL; method: string; body: any; headers: Headers }[] = [];
 const profile = (id: string) => ({ id, org_id: 'org-other', role_id: 'role-other', role: 'super_admin',
   full_name: id === 'caller' ? 'مدیر' : 'عضو مشترک', email: 'person@example.test', mobile_1: '09120000001', avatar_url: null });
@@ -14,6 +15,7 @@ beforeAll(async () => {
 });
 beforeEach(() => {
   calls.length = 0; shared = true;
+  loginCandidates = [{ org_id: 'org-other', user_id: 'target' }];
   scope = { org_id: 'org-current', role_id: 'role-current', role: 'admin', is_active: true };
   vi.stubGlobal('fetch', vi.fn(async (input: string | URL, init?: RequestInit) => {
     const url = new URL(String(input));
@@ -24,6 +26,12 @@ beforeEach(() => {
     if (url.pathname === '/auth/v1/user') return json({ id: 'caller' });
     if (url.pathname.endsWith('/rpc/get_current_organization_context')) return json(scope);
     if (url.pathname.endsWith('/rpc/manage_organization_member')) return json({ success: true });
+    if (url.pathname.endsWith('/rpc/organization_login_candidates')) return json(loginCandidates);
+    if (url.pathname.endsWith('/rpc/find_profile_by_phone_for_auth')) return json([profile('target')]);
+    if (url.pathname.endsWith('/rpc/provision_organization_password_account')) return json(null);
+    if (url.pathname.endsWith('/organization_password_accounts')) return json(url.searchParams.get('user_id') === 'eq.independent'
+      ? [{ phone_e164: '+989120000001', recovery_email: null }] : []);
+    if (url.pathname === '/auth/v1/admin/users' && method === 'POST') return json({ id: 'independent' });
     if (url.pathname.endsWith('/org_roles')) return json([{ id: 'role-current', org_id: 'org-current', title: 'مدیر' }]);
     if (url.pathname.endsWith('/profiles')) return json([profile(url.searchParams.get('id')?.replace('eq.', '') || 'target')]);
     if (url.pathname.endsWith('/user_organization_memberships')) {
@@ -40,6 +48,29 @@ const invoke = (body: Record<string, unknown>) => handler(new Request('https://t
 }));
 
 describe('tenant user administration uses membership context', () => {
+  it('creates a separate password identity in the current organization without changing the demo identity', async () => {
+    const response = await invoke({ action: 'create_user', orgId: 'org-current', fullName: 'عضو مشترک',
+      phone: '۰۹۱۲۰۰۰۰۰۰۱', roleId: 'role-current', role: 'editor', password: 'second-password' });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ independentAccount: true,
+      profile: { org_id: 'org-current', independent_account: true, can_edit_identity: false } });
+    const auth = calls.find(call => call.url.pathname === '/auth/v1/admin/users');
+    expect(auth?.body).toMatchObject({ email: expect.stringMatching(/@org-login\.invalid$/), password: 'second-password' });
+    expect(auth?.body).not.toHaveProperty('phone');
+    expect(calls.find(call => call.url.pathname.endsWith('provision_organization_password_account'))?.body)
+      .toMatchObject({ p_phone: '+989120000001', p_org_id: 'org-current', p_user_id: 'independent' });
+    expect(calls.some(call => call.url.pathname.endsWith('/users/target'))).toBe(false);
+    expect(calls.some(call => call.url.pathname.endsWith('/profiles') && call.method !== 'GET')).toBe(false);
+  });
+
+  it('protects an existing account in the destination organization from a repeated create', async () => {
+    loginCandidates = [{ org_id: 'org-current', user_id: 'target' }];
+    const response = await invoke({ action: 'create_user', orgId: 'org-current', fullName: 'عضو مشترک', phone: '09120000001', password: 'second-password' });
+    expect(response.status).toBe(409);
+    expect(calls.some(call => call.url.pathname.includes('/auth/v1/admin/'))).toBe(false);
+    expect(calls.some(call => call.url.pathname.endsWith('manage_organization_member'))).toBe(false);
+  });
+
   it('forwards request context and rejects a forged target organization before any write', async () => {
     const response = await invoke({ action: 'update_user', orgId: 'org-other' });
     expect(response.status).toBe(403);

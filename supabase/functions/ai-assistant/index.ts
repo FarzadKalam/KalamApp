@@ -2,6 +2,7 @@
 import { AI_PROVIDERS, ALTERNATE_AI_CAPABILITIES, getAiModelRoute, isAiProviderId, toAiCatalogModelId } from '../_shared/ai-provider-catalog.ts';
 import { DEFAULT_AVALAI_BASE_URL as DEFAULT_AI_BASE_URL, normalizeAiBaseUrl as normalizeBaseUrl, readAiProviderConfig, resolveAiModelConnection, resolveAiProviderConnection, prepareAlternateChatRequest, parseAlternateProviderModels, isProviderModelId } from '../_shared/ai-provider-runtime.ts';
 import {runCustomerVoiceTurn} from '../_shared/customer-voice-turn.ts';
+import { resolveAiConversationRouting } from '../_shared/ai-conversation-routing.ts';
 import {
   clearCentralAiProviderKeyCache,
   decryptProviderApiKey,
@@ -185,6 +186,7 @@ type AssistantAction =
   | 'list_threads'
   | 'rename_thread'
   | 'archive_thread'
+  | 'delete_conversation_message'
   | 'toggle_thread_pin'
   | 'compress_thread_context'
   | 'share_thread'
@@ -249,7 +251,7 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-const FUNCTION_BUILD = 'ai-assistant-2026-11-28-steering';
+const FUNCTION_BUILD = 'ai-assistant-2026-11-28-message-deletion';
 const PROVIDER_REQUEST_TIMEOUT_MS = 45000;
 // A streamed reply can legitimately take longer than a normal request.  Do
 // not abort a healthy stream merely because its total duration passes the
@@ -400,26 +402,6 @@ const isAutomaticStructuredActionCapability = (capability: string) =>
   || capability === 'process_operation'
   || capability === 'agent_task'
   || capability === 'pricing_adjustment';
-
-const inferAutoStructuredMutation = (prompt: string, pageContext: any) => {
-  const normalized = String(prompt || '')
-    .replace(/[يى]/g, 'ی')
-    .replace(/ك/g, 'ک')
-    .replace(/[\u200c\u200d]/g, '')
-    .trim();
-  const mentionsActivity = /(?:فعالیت|وظیفه|تسک|کار سازمانی)/.test(normalized);
-  const asksToCreate = /(?:بساز|ایجاد کن|ثبت کن|تعریف کن|اضافه کن|درج کن|برنامه ریزی کن)/.test(normalized);
-  const asksToUpdate = /(?:ویرایش کن|اصلاح کن|تغییر بده|به روز کن|تکمیل کن|لغو کن)/.test(normalized);
-  const currentModule = String(pageContext?.context?.moduleId || pageContext?.moduleId || '').trim();
-  if (!mentionsActivity || (!asksToCreate && !asksToUpdate)) return null;
-  if (asksToUpdate && currentModule === 'tasks') {
-    return { capabilities: ['record_creation'], target_module_id: 'tasks', mutation_mode: 'update' as const };
-  }
-  if (asksToCreate) {
-    return { capabilities: ['record_creation'], target_module_id: 'tasks', mutation_mode: 'create' as const };
-  }
-  return null;
-};
 
 const MODULE_TABLE_MAP: Record<string, string> = {
   productBundles: 'product_bundles',
@@ -899,7 +881,7 @@ const isInternalAgentStepMessage = (message: any) =>
   || String(message?.content || '').trim().startsWith('این مرحله تحلیل مشترک باندل است.');
 
 const filterVisibleAiMessages = (messages: any[]) =>
-  (messages || []).filter((message: any) => !isInternalAgentStepMessage(message));
+  (messages || []).filter((message: any) => !message?.metadata?.deleted_at && !isInternalAgentStepMessage(message));
 
 const restInsert = async (
   supabaseUrl: string,
@@ -2081,7 +2063,7 @@ const buildAgentDataToolRuntime = async (supabaseUrl: string, serviceRoleKey: st
         if (args.kind === 'message_text' || args.kind==='attachments') {
           if (!isUuid(args.messageId)) throw new Error('پیام معتبر انتخاب نشده است.');
           const rows=await restSelect(supabaseUrl,serviceRoleKey,'ai_messages',{ org_id: `eq.${authContext.orgId}`,thread_id: `eq.${thread.id}`,id: `eq.${args.messageId}`,select: 'id,role,content,metadata',limit: 1 });
-          if (!rows[0] || isInternalAgentStepMessage(rows[0])) throw new Error('متن پیام در دسترس نیست.');
+          if (!filterVisibleAiMessages(rows).length) throw new Error('متن پیام در دسترس نیست.');
           const text=String(rows[0].content || '');
           const attachments=normalizeIntakeAttachments([...(rows[0].metadata?.attachments || []),...(rows[0].metadata?.files || []),rows[0].metadata?.file].filter(Boolean));
           if (args.kind==='attachments') return { attachments: attachments.slice(offset,offset+10),nextOffset: attachments.length>offset+10 ? offset+10 : null,total: attachments.length };
@@ -2089,7 +2071,7 @@ const buildAgentDataToolRuntime = async (supabaseUrl: string, serviceRoleKey: st
             attachments: attachments.slice(0,10),nextAttachmentsOffset: attachments.length>10 ? 10 : null };
         }
         if (args.kind !== 'messages') throw new Error('نوع حافظه معتبر نیست.');
-        const rows=await restSelect(supabaseUrl,serviceRoleKey,'ai_messages',{ org_id: `eq.${authContext.orgId}`,thread_id: `eq.${thread.id}`,select: 'id,role,content,created_at,metadata',order: 'created_at.desc,id.desc',limit: 11,offset });
+        const rows=await restSelect(supabaseUrl,serviceRoleKey,'ai_messages',{ org_id: `eq.${authContext.orgId}`,thread_id: `eq.${thread.id}`,'metadata->>deleted_at': 'is.null',select: 'id,role,content,created_at,metadata',order: 'created_at.desc,id.desc',limit: 11,offset });
         return { messages: filterVisibleAiMessages(rows.slice(0,10)).map(row => ({ messageId: row.id,role: row.role,textPreview: String(row.content || '').slice(0,800),createdAt: row.created_at })),nextOffset: rows.length>10 ? offset+10 : null };
       }
       if (name === 'read_process_context') return await processData.execute(args);
@@ -6899,6 +6881,7 @@ const fetchThreadMessages = async (
   const messages = await safeRestSelect(supabaseUrl, serviceRoleKey, 'ai_messages', {
     thread_id: `eq.${threadId}`,
     org_id: `eq.${authContext.orgId}`,
+    'metadata->>deleted_at': 'is.null',
     select: 'id,thread_id,role,content,provider,model,metadata,created_at',
     order: 'created_at.desc,id.desc',
     limit,
@@ -6950,7 +6933,7 @@ const loadAiThreadMemory = async (url: string,key: string,auth: any,thread: any,
   const selected=provider.compressionModel || { model: provider.model,provider: provider.provider,catalogRow: provider.modelCatalog };
   for (;;) {
     const rows=await restSelect(url,key,'ai_messages',{
-      org_id: `eq.${auth.orgId}`,thread_id: `eq.${thread.id}`,select: 'id,role,content,metadata,created_at',
+      org_id: `eq.${auth.orgId}`,thread_id: `eq.${thread.id}`,'metadata->>deleted_at': 'is.null',select: 'id,role,content,metadata,created_at',
       order: 'created_at.asc,id.asc',limit: 40,
       ...(after ? { or: `(created_at.gt.${after.created_at},and(created_at.eq.${after.created_at},id.gt.${after.id}))` } : {}),
     });
@@ -6983,6 +6966,7 @@ const loadAiThreadMemory = async (url: string,key: string,auth: any,thread: any,
       if (!result.compacted || !result.cursorMessageId) throw new Error('ذخیره حافظه فشرده تأیید نشد.');
       const updated=await restPatch(url,key,'ai_threads',{ org_id: `eq.${auth.orgId}`,id: `eq.${thread.id}`,
         compaction_cursor_message_id: cursorId ? `eq.${cursorId}` : 'is.null',
+        ...aiMessageHistoryFilter(thread),
       },{ compaction_summary: result.summary,compaction_cursor_message_id: result.cursorMessageId,working_state: result.workingState });
       if (updated.length!==1) throw new Error('حافظه گفتگو هم‌زمان تغییر کرد؛ دوباره ادامه دهید. اصل پیام‌ها محفوظ است.');
       cursorId=result.cursorMessageId; summary=result.summary; state=result.workingState;
@@ -7001,10 +6985,13 @@ const loadAiThreadMemory = async (url: string,key: string,auth: any,thread: any,
     if (page.length<100) break;
   }
   thread.working_state.pending_action_refs=pending;
-  const saved=await restPatch(url,key,'ai_threads',{ org_id: `eq.${auth.orgId}`,id: `eq.${thread.id}`,compaction_cursor_message_id: cursorId ? `eq.${cursorId}` : 'is.null' },{ working_state: thread.working_state });
+  const saved=await restPatch(url,key,'ai_threads',{ org_id: `eq.${auth.orgId}`,id: `eq.${thread.id}`,compaction_cursor_message_id: cursorId ? `eq.${cursorId}` : 'is.null', ...aiMessageHistoryFilter(thread) },{ working_state: thread.working_state });
   if (saved.length!==1) throw new Error('حافظه گفتگو هم‌زمان تغییر کرد؛ اصل پیام‌ها محفوظ است.');
   return buffer;
 };
+
+const aiMessageHistoryFilter = (thread: any) => thread?.message_history_revision == null
+  ? {} : { message_history_revision: `eq.${thread.message_history_revision}` };
 
 const findThreadByContextKey = async (
   supabaseUrl: string,
@@ -7702,6 +7689,7 @@ const handleGetThread = async (supabaseUrl: string, serviceRoleKey: string, auth
       success: true,
       thread,
       threadId: thread?.id || null,
+      canDeleteMessages: !!thread && normalizeId(thread.user_id) === normalizeId(authContext.userId),
       messages,
       proposedAction,
     });
@@ -7824,6 +7812,18 @@ const handleArchiveThread = async (supabaseUrl: string, serviceRoleKey: string, 
     updated_at: new Date().toISOString(),
   });
   return json(200, { success: true, archived: rows.length > 0 });
+};
+
+const handleDeleteConversationMessage = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
+  const threadId = normalizeId(body?.threadId);
+  const messageId = normalizeId(body?.messageId);
+  if (!isUuid(threadId) || !isUuid(messageId)) return json(400, { success: false, message: 'پیام معتبر انتخاب نشده است.' });
+  const result = await restRpc(supabaseUrl, serviceRoleKey, 'delete_ai_conversation_message', {
+    p_org_id: authContext.orgId, p_user_id: authContext.userId, p_thread_id: threadId, p_message_id: messageId,
+  });
+  return result
+    ? json(200, { success: true, rejectedActionIds: result.rejectedActionIds || [] })
+    : json(404, { success: false, message: 'پیام در گفتگوی قابل مدیریت پیدا نشد.' });
 };
 
 const handleToggleThreadPin = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
@@ -7997,6 +7997,7 @@ const handleCompressThreadContext = async (supabaseUrl: string, serviceRoleKey: 
     id: `eq.${thread.id}`,
     org_id: `eq.${authContext.orgId}`,
     compaction_cursor_message_id: thread.compaction_cursor_message_id ? `eq.${thread.compaction_cursor_message_id}` : 'is.null',
+    ...aiMessageHistoryFilter(thread),
   }, {
     compaction_summary: summary,
     compaction_cursor_message_id: compactResult.cursorMessageId || thread.compaction_cursor_message_id,
@@ -8507,7 +8508,7 @@ const patchChatThreadAfterAssistant = async (
 ) => {
   const inputKind = String(prepared.body?.inputKind || prepared.body?.input_kind || 'text').trim() || 'text';
   const failed = options.failed === true;
-  await restPatch(supabaseUrl, serviceRoleKey, 'ai_threads', { id: `eq.${prepared.thread.id}`, org_id: `eq.${authContext.orgId}` }, {
+  await restPatch(supabaseUrl, serviceRoleKey, 'ai_threads', { id: `eq.${prepared.thread.id}`, org_id: `eq.${authContext.orgId}`, ...aiMessageHistoryFilter(prepared.thread) }, {
     updated_at: new Date().toISOString(),
     provider: aiResult?.provider || prepared.providerConfig.provider,
     model: aiResult?.model || prepared.providerConfig.model,
@@ -9537,7 +9538,7 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
         },
       },
     });
-    await restPatch(supabaseUrl, serviceRoleKey, 'ai_threads', { id: `eq.${thread.id}`, org_id: `eq.${authContext.orgId}` }, {
+    await restPatch(supabaseUrl, serviceRoleKey, 'ai_threads', { id: `eq.${thread.id}`, org_id: `eq.${authContext.orgId}`, ...aiMessageHistoryFilter(thread) }, {
       updated_at: new Date().toISOString(),
       provider: providerConfig.provider,
       model: providerConfig.model,
@@ -9664,7 +9665,7 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
   });
   await patchAiMessageCustomerBilling(supabaseUrl, serviceRoleKey, authContext, assistantMessage, aiResult.usageMetadata, ledger);
 
-  await restPatch(supabaseUrl, serviceRoleKey, 'ai_threads', { id: `eq.${thread.id}`, org_id: `eq.${authContext.orgId}` }, {
+  await restPatch(supabaseUrl, serviceRoleKey, 'ai_threads', { id: `eq.${thread.id}`, org_id: `eq.${authContext.orgId}`, ...aiMessageHistoryFilter(thread) }, {
     updated_at: new Date().toISOString(),
     provider: aiResult.provider,
     model: aiResult.model,
@@ -9948,7 +9949,7 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
   ], thread?.metadata?.record_intake_context?.moduleId === targetModuleId ? thread.metadata.record_intake_context.attachments || [] : thread.working_state?.active_intake_attachments || [], previousMessages);
   effectiveSchema = { ...effectiveSchema, intakeAttachments };
   // Keep references even if a provider fails before producing a draft.
-  await restPatch(supabaseUrl, serviceRoleKey, 'ai_threads', { id: `eq.${thread.id}`, org_id: `eq.${authContext.orgId}` }, {
+  await restPatch(supabaseUrl, serviceRoleKey, 'ai_threads', { id: `eq.${thread.id}`, org_id: `eq.${authContext.orgId}`, ...aiMessageHistoryFilter(thread) }, {
     metadata: { ...(thread.metadata || {}), record_intake_context: { ...(thread.metadata?.record_intake_context || {}),
       moduleId: targetModuleId, attachments: intakeAttachments } },
   });
@@ -10330,7 +10331,7 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
       },
     });
     await patchAiMessageCustomerBilling(supabaseUrl, serviceRoleKey, authContext, assistantMessage, aiResult.usageMetadata, ledger);
-    await restPatch(supabaseUrl, serviceRoleKey, 'ai_threads', { id: `eq.${thread.id}`, org_id: `eq.${authContext.orgId}` }, {
+    await restPatch(supabaseUrl, serviceRoleKey, 'ai_threads', { id: `eq.${thread.id}`, org_id: `eq.${authContext.orgId}`, ...aiMessageHistoryFilter(thread) }, {
       updated_at: new Date().toISOString(),
       provider: aiResult.provider,
       model: aiResult.model,
@@ -10790,10 +10791,12 @@ const handleSuggestAutoCapabilities = async (supabaseUrl: string, serviceRoleKey
       responseFormat: { type: 'json_object' },
     });
     const parsed = extractJsonObjectFromText(routeResult.content) || {};
-    const inferredMutation = inferAutoStructuredMutation(prompt, pageContext);
-    const routingDecision = inferredMutation && !parsed.capabilities?.includes?.('agent_task') && availableCapabilities.includes('record_creation')
-      ? { ...parsed, ...inferredMutation }
-      : parsed;
+    const routingDecision = resolveAiConversationRouting({
+      prompt: String(body?.message || body?.prompt || prompt),
+      currentModule: pageContext?.moduleId || pageContext?.context?.moduleId,
+      decision: parsed,
+      recordCreationAllowed: availableCapabilities.includes('record_creation'),
+    });
     const agentPlan = normalizeAgentPlan(routingDecision, {
       policy: 'interactive_chat' as AgentExecutionPolicy,
       allowedCapabilities: availableCapabilities,
@@ -11373,7 +11376,7 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
       inputs: bundleMeta,
       updated_at: new Date().toISOString(),
     };
-    await restPatch(supabaseUrl, serviceRoleKey, 'ai_threads', { id: `eq.${workingThreadId}`, org_id: `eq.${authContext.orgId}` }, {
+    await restPatch(supabaseUrl, serviceRoleKey, 'ai_threads', { id: `eq.${workingThreadId}`, org_id: `eq.${authContext.orgId}`, ...aiMessageHistoryFilter(publicThread) }, {
       agent_key: aggregatedPrimaryAgent,
       selected_agents: aggregatedSelectedAgents.length ? aggregatedSelectedAgents : ['lead_orchestrator'],
       channel: bundleChannel,
@@ -12332,7 +12335,7 @@ const handleProcessOperationFromPrompt = async (supabaseUrl: string, serviceRole
       metadata: { source: 'process_operation_clarification', context_key: contextKey },
     });
     await patchAiMessageCustomerBilling(supabaseUrl, serviceRoleKey, authContext, assistantMessage, aiResult.usageMetadata, ledger);
-    await restPatch(supabaseUrl, serviceRoleKey, 'ai_threads', { id: `eq.${thread.id}`, org_id: `eq.${authContext.orgId}` }, {
+    await restPatch(supabaseUrl, serviceRoleKey, 'ai_threads', { id: `eq.${thread.id}`, org_id: `eq.${authContext.orgId}`, ...aiMessageHistoryFilter(thread) }, {
       updated_at: new Date().toISOString(),
       provider: aiResult.provider,
       model: aiResult.model,
@@ -12424,7 +12427,7 @@ const handleProcessOperationFromPrompt = async (supabaseUrl: string, serviceRole
       metadata: { source: 'process_operation_preview', context_key: contextKey, operation_count: operations.length },
     });
     await patchAiMessageCustomerBilling(supabaseUrl, serviceRoleKey, authContext, assistantMessage, aiResult.usageMetadata, ledger);
-    await restPatch(supabaseUrl, serviceRoleKey, 'ai_threads', { id: `eq.${thread.id}`, org_id: `eq.${authContext.orgId}` }, {
+    await restPatch(supabaseUrl, serviceRoleKey, 'ai_threads', { id: `eq.${thread.id}`, org_id: `eq.${authContext.orgId}`, ...aiMessageHistoryFilter(thread) }, {
       updated_at: new Date().toISOString(),
       provider: aiResult.provider,
       model: aiResult.model,
@@ -19086,6 +19089,7 @@ Deno.serve(async (req: Request) => {
     if (action === 'list_threads') return await handleListThreads(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'rename_thread') return await handleRenameThread(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'archive_thread') return await handleArchiveThread(supabaseUrl, serviceRoleKey, authContext, body);
+    if (action === 'delete_conversation_message') return await handleDeleteConversationMessage(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'toggle_thread_pin') return await handleToggleThreadPin(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'share_thread') return await handleShareThread(supabaseUrl, serviceRoleKey, authContext, body);
     if(action==='customer_voice_turn'){
