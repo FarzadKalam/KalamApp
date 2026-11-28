@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Table, Button, Space, App, Empty, Typography, Spin, Select, InputNumber, Popover, Input, Modal, Checkbox } from 'antd';
-import { EditOutlined, DeleteOutlined, PlusOutlined, SaveOutlined, CloseOutlined, CloseCircleOutlined, RightOutlined, CopyOutlined, FileTextOutlined, EnvironmentOutlined, CalendarOutlined, AppstoreOutlined, CheckOutlined, EyeOutlined, DownloadOutlined, ShareAltOutlined, PrinterOutlined, UpOutlined, DownOutlined, ClockCircleOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons';
+import { EditOutlined, DeleteOutlined, PlusOutlined, SaveOutlined, CloseOutlined, CloseCircleOutlined, RightOutlined, CopyOutlined, FileTextOutlined, EnvironmentOutlined, CalendarOutlined, AppstoreOutlined, CheckOutlined, EyeOutlined, DownloadOutlined, ShareAltOutlined, PrinterOutlined, UpOutlined, DownOutlined, ClockCircleOutlined, ReloadOutlined, SearchOutlined, SwapOutlined } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
 import { FieldType, ModuleField, RowCalculationType } from '../types';
 import { calculateRow } from '../utils/calculations';
@@ -3992,6 +3992,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
   };
 
   const getColWidth = (col: any) => {
+    if (isAnyInvoiceItems && col.key === 'discount') return Math.max(164, col.width || 0);
     if (col.width) return col.width;
     if (col.type === FieldType.RELATION) return 240;
     if (col.type === FieldType.SELECT || col.type === FieldType.MULTI_SELECT || col.type === FieldType.STATUS) return 170;
@@ -4312,7 +4313,8 @@ const EditableTable: React.FC<EditableTableProps> = ({
 
   const visibleColumns = (block.tableColumns || []).filter((col: any) =>
     (canViewField ? canViewField(col.key) !== false : true) &&
-    !(isAnyInvoiceItems && col.key === 'package_id')
+    // درصد تخفیف قدیمی برای سازگاری با داده‌ها و ورودی اکسل حفظ می‌شود.
+    !(isAnyInvoiceItems && ['package_id', 'discount_percent'].includes(col.key))
   );
 
   const applySelectedProduct = (rowIndex: number, rowKey: string, selected: any) => {
@@ -4676,6 +4678,10 @@ const EditableTable: React.FC<EditableTableProps> = ({
     };
     const typeKey = col.key === 'discount' ? 'discount_type' : col.key === 'vat' ? 'vat_type' : null;
     const typeValue = typeKey ? (record as any)[typeKey] : null;
+    const isInvoiceDiscount = isAnyInvoiceItems && col.key === 'discount';
+    const discountUnit = typeValue === 'percent' ? 'درصد' : currencyLabel;
+    const nextDiscountUnit = typeValue === 'percent' ? currencyLabel : 'درصد';
+    const discountUnitAction = `واحد تخفیف ${discountUnit} است. تغییر به ${nextDiscountUnit}`;
     const isMovementQty = isProductStockMovements && col.key === 'main_quantity' && !isEditing;
     const movementType = String((record as any)?.voucher_type || '');
     const movementColor = movementType === 'incoming' ? 'text-green-600' : movementType === 'outgoing' ? 'text-red-600' : 'text-blue-600';
@@ -5093,7 +5099,23 @@ const EditableTable: React.FC<EditableTableProps> = ({
             />
           </Popover>
         )}
-        {col.type === FieldType.PERCENTAGE_OR_AMOUNT && typeKey && (
+        {col.type === FieldType.PERCENTAGE_OR_AMOUNT && isInvoiceDiscount && (
+          !isReadOnly && (isEditing || mode === 'local') ? (
+            <Button
+              size="small"
+              icon={<SwapOutlined aria-hidden="true" />}
+              className="shrink-0 whitespace-nowrap !min-h-8 !px-2"
+              title={discountUnitAction}
+              aria-label={discountUnitAction}
+              onClick={() => updateRow(index, 'discount_type', typeValue === 'percent' ? 'amount' : 'percent')}
+            >
+              {discountUnit}
+            </Button>
+          ) : (
+            <span className="shrink-0 whitespace-nowrap text-xs text-gray-600 dark:text-gray-300">{discountUnit}</span>
+          )
+        )}
+        {col.type === FieldType.PERCENTAGE_OR_AMOUNT && typeKey && !isInvoiceDiscount && (
           <Button
             size="small"
             type="text"
