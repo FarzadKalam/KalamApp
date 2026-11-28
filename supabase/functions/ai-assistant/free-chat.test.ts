@@ -16,9 +16,10 @@ describe('free conversation identity',() => {
     const freeThread=await switchMode('url','key',{orgId:'org',userId:'actor'},{threadId:'old-org-thread',forceNew:true,metadata:{free_chat:true}});
     expect(freeThread.id).not.toBe('old-org-thread');expect(freeThread.metadata.free_chat).toBe(true);
     const patch=vi.fn(async(..._args:any[])=>[]);
-    const complete=load('patchChatThreadAfterAssistant','handleChat',{restPatch:patch,getContextKind:deps.getContextKind,buildThreadContextLabel:deps.buildThreadContextLabel,buildThreadModelOverrides:()=>({}),buildThreadComposerPreferences:()=>({})});
-    await complete('url','key',{orgId:'org'},{freeChatMode:true,message:'متن',pageContext:{context:{}},providerConfig:{},thread:{id:'thread',agent_key:'lead_orchestrator',metadata:{agent_key:'lead_orchestrator'}},selectedAgents:[],body:{}},{});
-    expect(patch.mock.calls[0][3]).toEqual({id:'eq.thread',org_id:'eq.org'});
+    const aiMessageHistoryFilter = load('aiMessageHistoryFilter', 'findThreadByContextKey', {});
+    const complete=load('patchChatThreadAfterAssistant','handleChat',{restPatch:patch,getContextKind:deps.getContextKind,buildThreadContextLabel:deps.buildThreadContextLabel,buildThreadModelOverrides:()=>({}),buildThreadComposerPreferences:()=>({}),aiMessageHistoryFilter});
+    await complete('url','key',{orgId:'org'},{freeChatMode:true,message:'متن',pageContext:{context:{}},providerConfig:{},thread:{id:'thread',agent_key:'lead_orchestrator',message_history_revision:3,metadata:{agent_key:'lead_orchestrator'}},selectedAgents:[],body:{}},{});
+    expect(patch.mock.calls[0][3]).toEqual({id:'eq.thread',org_id:'eq.org',message_history_revision:'eq.3'});
     expect(patch.mock.calls[0][4]).toMatchObject({agent_key:null,selected_agents:[],metadata:{free_chat:true,agent_key:null,selected_agents:[]}});
   });
 });
