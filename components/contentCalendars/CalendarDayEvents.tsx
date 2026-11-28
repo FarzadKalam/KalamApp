@@ -1,11 +1,14 @@
-import { useId, useState, type ReactNode } from 'react';
+import { useEffect, useId, useState, type ReactNode } from 'react';
 import { toPersianNumber } from '../../utils/persianNumberFormatter';
 
-export default function CalendarDayEvents<T>({ items, renderItem, limit = 3, className = 'space-y-1' }: {
-  items: T[]; renderItem: (item: T) => ReactNode; limit?: number; className?: string;
+export default function CalendarDayEvents<T>({ items, renderItem, limit = 3, className = 'space-y-1', reveal }: {
+  items: T[]; renderItem: (item: T) => ReactNode; limit?: number; className?: string; reveal?: object;
 }) {
   const [expanded, setExpanded] = useState(false);
   const id = useId();
+  useEffect(() => {
+    if (reveal) setExpanded(true);
+  }, [reveal]);
   return <div className={className}>
     <div id={id} className={className}>{(expanded ? items : items.slice(0, limit)).map(renderItem)}</div>
     {items.length > limit ? <button type="button" aria-expanded={expanded} aria-controls={id}
